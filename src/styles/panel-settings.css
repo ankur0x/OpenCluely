@@ -1,0 +1,25 @@
+body.provider-settings { background: #252628; color: #eef0f2; }
+.provider-settings header { justify-content: space-between; background: #343638; }
+.provider-settings h1 { font-size: 16px; }
+.provider-settings h2 { margin: 0 0 6px; font-size: 14px; }
+.provider-settings form { flex: 1; min-height: 0; overflow: auto; padding: 12px 17px; }
+.provider-settings section + section { border-top: 1px solid #ffffff29; margin-top: 14px; padding-top: 12px; }
+.provider-settings label { display: block; margin: 7px 0; font-size: 13px; }
+.provider-settings input {
+  display: block; width: 100%; margin-top: 4px; padding: 6px 8px;
+  font: inherit; color: inherit; border: 1px solid #4b4d50; border-radius: 6px; background: #1d1e20;
+}
+.provider-settings input:focus-visible { outline: 2px solid #e9ecf0; outline-offset: 2px; }
+.provider-settings small { display: block; color: #c8cdd2; font-size: 11px; }
+.provider-settings details { margin: 8px 0; }
+.provider-settings summary { cursor: pointer; }
+.provider-settings .settings-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.provider-settings footer { border-top: 1px solid #ffffff29; padding: 8px 17px 10px; }
+.provider-settings #status { margin: 0 0 6px; color: #e9ecf0; font-size: 12px; min-height: 1em; }
+.provider-settings #status[data-error=true] { color: #ffaaa8; }
+.provider-settings #save { background: #c8cdd2; color: #1d1e20; }
+.provider-settings .setting-note { color: #c8cdd2; font-size: 12px; }
+
+.provider-settings .inline-picker { position: relative; margin: 4px 0 8px; }
+.provider-settings .inline-picker select { display: block; width: 100%; font: inherit; color: inherit; background: #252628; border: 1px solid #4b4d50; border-radius: 7px; padding: 4px; }
+.provider-settings #catalogStatus:empty { display: none; }

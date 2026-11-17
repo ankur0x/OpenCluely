@@ -15,9 +15,11 @@ class LLMService {
   }
 
   initializeClient() {
+    this.client = null;
+    this.isInitialized = false;
     const apiKey = config.getApiKey('GEMINI');
     
-    if (!apiKey || apiKey === 'your-api-key-here') {
+    if (!apiKey || /^your[_-]/i.test(apiKey)) {
       logger.warn('Gemini API key not configured', { 
         keyExists: !!apiKey,
         isPlaceholder: apiKey === 'your-api-key-here'
@@ -29,7 +31,7 @@ class LLMService {
       this.client = new GoogleGenAI({ apiKey });
       
       // Use the configured model name (default: gemini-3.5-flash)
-      this.model = config.get('llm.gemini.model');
+      this.model = process.env.GEMINI_MODEL || config.get('llm.gemini.model');
       this.isInitialized = true;
       
       logger.info('Gemini AI client initialized successfully', {
@@ -225,7 +227,7 @@ class LLMService {
     }
   }
 
-  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, question = '', signal = undefined) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check Gemini API key configuration.');
     }
@@ -247,7 +249,7 @@ class LLMService {
           {
             role: 'user',
             parts: [
-              { text: this.formatImageInstruction(activeSkill, programmingLanguage) },
+              { text: [this.formatImageInstruction(activeSkill, programmingLanguage), question].filter(Boolean).join('\n\n') },
               { inlineData: { data: base64, mimeType } }
             ]
           }
@@ -262,7 +264,7 @@ class LLMService {
         if (typeof onDelta === 'function' && delta) {
           onDelta(delta);
         }
-      });
+      }, signal);
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
@@ -389,7 +391,7 @@ class LLMService {
     }
   }
 
-  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, signal = undefined) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check Gemini API key configuration.');
     }
@@ -404,7 +406,7 @@ class LLMService {
         if (typeof onDelta === 'function' && delta) {
           onDelta(delta);
         }
-      });
+      }, signal);
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
@@ -843,7 +845,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     const timeout = config.get('llm.gemini.timeout');
     const primaryModel = this.model;
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
-    const modelsToTry = [primaryModel, ...fallbackModels];
+    const modelsToTry = [...new Set([primaryModel, ...(process.env.GEMINI_MODEL ? [] : fallbackModels)])];
 
     logger.debug('Executing Gemini request', {
       hasModel: !!this.model,
@@ -1053,19 +1055,24 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
    * as executeRequest. Accumulates and returns the full text; invokes onDelta
    * for each chunk.
    */
-  async executeStreamingRequest(geminiRequest, onDelta) {
+  async executeStreamingRequest(geminiRequest, onDelta, signal) {
     const maxRetries = config.get('llm.gemini.maxRetries');
     const apiKey = config.getApiKey('GEMINI');
     const primaryModel = this.model;
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
-    const modelsToTry = [primaryModel, ...fallbackModels];
+    const modelsToTry = [...new Set([primaryModel, ...(process.env.GEMINI_MODEL ? [] : fallbackModels)])];
 
     let lastError = null;
+    let emittedText = false;
+    const emit = typeof onDelta === 'function' ? (delta) => {
+      emittedText = true;
+      onDelta(delta);
+    } : null;
 
     for (const modelName of modelsToTry) {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const fullText = await this._streamRequestForModel(geminiRequest, modelName, apiKey, onDelta);
+          const fullText = await this._streamRequestForModel(geminiRequest, modelName, apiKey, emit, signal);
 
           if (!fullText) {
             throw new Error('Empty streamed response from Gemini API');
@@ -1079,6 +1086,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
           return fullText;
         } catch (error) {
+          if (emittedText || signal?.aborted) throw error;
           const errorInfo = this.analyzeError(error);
           lastError = error;
 
@@ -1112,7 +1120,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     throw lastError || new Error('Gemini streaming request failed');
   }
 
-  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta) {
+  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta, signal) {
     const https = require('https');
     const timeout = config.get('llm.gemini.timeout');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
@@ -1128,6 +1136,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         'User-Agent': this.getUserAgent()
       },
       timeout,
+      signal,
       agent
     };
 
@@ -1183,6 +1192,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         reject(new Error('Streaming request timeout'));
       });
 
+      req.on('close', () => agent.destroy());
       req.write(postData);
       req.end();
     });

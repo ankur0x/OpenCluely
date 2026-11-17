@@ -5,7 +5,21 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('electronAPI', {
   // Screenshot and OCR
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  onChatUserMessage: (callback) => ipcRenderer.on('chat-user-message', (_event, data) => callback(data)),
+  discardChatImage: id => ipcRenderer.invoke('discard-chat-image', id),
+  attachChatImage: bytes => ipcRenderer.invoke('attach-chat-image', bytes),
+  refreshPanelModels: () => ipcRenderer.invoke('refresh-panel-models'),
+  onChatScreenshotReady: (callback) => ipcRenderer.on('chat-screenshot-ready', (_event, data) => callback(data)),
+  onChatRequestError: (callback) => ipcRenderer.on('chat-request-error', (_event, data) => callback(data)),
   
+  getPanelState: () => ipcRenderer.invoke('get-panel-state'),
+  setPanelSession: (active) => ipcRenderer.invoke('set-panel-session', active),
+  selectPanelModel: (kind, id, model) => ipcRenderer.invoke('select-panel-model', kind, id, model),
+  collapsePanel: (collapsed) => ipcRenderer.invoke('collapse-panel', collapsed),
+  onPanelState: (callback) => ipcRenderer.on('panel-state', (_event, data) => callback(data)),
+  onProviderSettingsShown: (callback) => ipcRenderer.on('settings-window-shown', () => callback()),
+  quitFromSettings: () => ipcRenderer.invoke('quit-app'),
+
   // Speech recognition
   startSpeechRecognition: () => ipcRenderer.invoke('start-speech-recognition'),
   stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
@@ -28,7 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLLMSessionHistory: () => ipcRenderer.invoke('get-llm-session-history'),
   clearSessionMemory: () => ipcRenderer.invoke('clear-session-memory'),
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),
-  sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
+  sendChatMessage: (text, imageIds) => ipcRenderer.invoke('send-chat-message', text, imageIds),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
   
   // Gemini LLM configuration

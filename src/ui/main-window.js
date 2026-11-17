@@ -247,6 +247,11 @@ class MainWindowUI {
                 const width = Math.ceil(rect.width);
                 let height = Math.ceil(rect.height);
 
+                const languageList = document.querySelector('#codingLanguage:not([hidden])');
+                if (languageList) {
+                    height = Math.max(height, Math.ceil(languageList.getBoundingClientRect().bottom + 6));
+                }
+
                 // If shortcuts popover is visible, extend height to fit it
                 if (this.shortcutsPopover && this.shortcutsPopover.classList.contains('is-open')) {
                     const popRect = this.shortcutsPopover.getBoundingClientRect();
@@ -338,22 +343,23 @@ class MainWindowUI {
         // Language dropdown
         this.languageSelect = document.getElementById('codingLanguage');
         if (this.languageSelect) {
+            this.languageSelect.addEventListener('picker-layout-change', () => this.resizeWindowToContent());
             // Set default to C++ if no value is set
-            this.languageSelect.value = 'cpp';
+            setInlinePickerValue(this.languageSelect, 'cpp');
             
             // Initialize with current setting
             if (window.electronAPI && window.electronAPI.getSettings) {
                 window.electronAPI.getSettings().then(settings => {
                     if (settings && settings.codingLanguage) {
-                        this.languageSelect.value = settings.codingLanguage;
+                        setInlinePickerValue(this.languageSelect, settings.codingLanguage);
                     } else {
                         // Save C++ as default if no language is set
-                        this.languageSelect.value = 'cpp';
+                        setInlinePickerValue(this.languageSelect, 'cpp');
                         window.electronAPI.saveSettings({ codingLanguage: 'cpp' });
                     }
                 }).catch(() => {
                     // Fallback to C++ on error
-                    this.languageSelect.value = 'cpp';
+                    setInlinePickerValue(this.languageSelect, 'cpp');
                 });
             }
 
@@ -362,14 +368,7 @@ class MainWindowUI {
                 if (window.electronAPI && window.electronAPI.saveSettings) {
                     window.electronAPI.saveSettings({ codingLanguage: lang });
                 }
-                // Resize for any width change
-                setTimeout(() => {
-                    const commandTab = document.querySelector('.command-tab');
-                    if (commandTab && window.electronAPI && window.electronAPI.resizeWindow) {
-                        const rect = commandTab.getBoundingClientRect();
-                        window.electronAPI.resizeWindow(Math.ceil(rect.width), Math.ceil(rect.height));
-                    }
-                }, 50);
+                this.resizeWindowToContent();
             });
         }
 
@@ -449,7 +448,7 @@ class MainWindowUI {
                 if (data && data.language && this.languageSelect) {
                     // avoid clobbering if same value
                     if (this.languageSelect.value !== data.language) {
-                        this.languageSelect.value = data.language;
+                        setInlinePickerValue(this.languageSelect, data.language);
                     }
                     logger.debug('Language updated from other window', {
                         component: 'MainWindowUI',

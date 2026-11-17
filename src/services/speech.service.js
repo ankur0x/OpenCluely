@@ -382,6 +382,7 @@ if (typeof window === 'undefined') {
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { transcribeCloud, hasKey } = require('./panel-models');
 const { spawn, spawnSync } = require('child_process');
 const { EventEmitter } = require('events');
 const logger = require('../core/logger').createServiceLogger('SPEECH');
@@ -450,6 +451,12 @@ class SpeechService extends EventEmitter {
 
     if (provider === 'whisper') {
       this._initializeWhisperClient();
+      return;
+    }
+
+    if (this._usesCloudTranscription()) {
+      this.available = hasKey(process.env[provider === 'groq' ? 'GROQ_API_KEY' : 'GEMINI_API_KEY']);
+      this.emit('status', this.available ? 'Cloud transcription ready' : 'Add a speech provider API key in Settings.');
       return;
     }
 
@@ -566,7 +573,7 @@ class SpeechService extends EventEmitter {
         return;
       }
 
-      if (this.provider === 'whisper') {
+      if (this._usesBufferedCapture()) {
         this._startWhisperRecording();
         return;
       }
@@ -675,9 +682,19 @@ class SpeechService extends EventEmitter {
     );
   }
 
+  _usesCloudTranscription() {
+    return this.provider === 'groq' || this.provider === 'gemini';
+  }
+
+  _usesBufferedCapture() {
+    return this.provider === 'whisper' || this._usesCloudTranscription();
+  }
+
   _startWhisperRecording() {
     this._cleanup();
     this.isRecording = true;
+    this.discardTranscription = false;
+    this.cloudTranscription = this._usesCloudTranscription() ? new AbortController() : null;
     this.segmentBuffers = [];
     this.segmentBytes = 0;
     this.transcriptionInFlight = false;
@@ -686,9 +703,9 @@ class SpeechService extends EventEmitter {
     this.manualStopRequested = false;
     this._resetVadState();
     this.emit('recording-started');
-    this.emit('status', 'Local Whisper recording started');
+    this.emit('status', 'Recording started');
 
-    if (this.whisperWorker.isConfigured()) {
+    if (this.provider === 'whisper' && this.whisperWorker.isConfigured()) {
       this.whisperWorker.warmup({
         model: this._getWhisperModel(),
         modelDir: this._getWhisperModelDir(),
@@ -759,7 +776,7 @@ class SpeechService extends EventEmitter {
       clearInterval(this.segmentTimer);
     }
     this.segmentTimer = setInterval(() => {
-      if (!this.isRecording || this.provider !== 'whisper') {
+      if (!this.isRecording || !this._usesBufferedCapture()) {
         return;
       }
 
@@ -788,7 +805,7 @@ class SpeechService extends EventEmitter {
    * the current Whisper segment buffer.
    */
   handleAudioChunkFromRenderer(chunk) {
-    if (!this.isRecording || this.provider !== 'whisper' || !this.useRendererCapture) {
+    if (!this.isRecording || !this._usesBufferedCapture() || !this.useRendererCapture) {
       return;
     }
     if (!chunk || !chunk.length) {
@@ -944,7 +961,15 @@ class SpeechService extends EventEmitter {
     return buffer.length / 32;
   }
 
-  stopRecording() {
+  stopRecording({ discard = false } = {}) {
+    if (discard) {
+      this.discardTranscription = true;
+      this.cloudTranscription?.abort();
+      this.segmentBuffers = [];
+      this.segmentBytes = 0;
+      this.pendingFlush = false;
+      this.pendingFinal = false;
+    }
     if (!this.isRecording) {
       return;
     }
@@ -974,10 +999,10 @@ class SpeechService extends EventEmitter {
       return;
     }
 
-    if (this.provider === 'whisper') {
+    if (this._usesBufferedCapture()) {
       this.isProcessingAudio = true;
       this.emit('recording-stopped');
-      this.emit('status', 'Processing local speech…');
+      this.emit('status', 'Processing speech...');
       this._finalizeWhisperStop({ captureAlreadyStopped: true });
       return;
     }
@@ -1162,7 +1187,7 @@ class SpeechService extends EventEmitter {
       provider: this.provider,
       isRecording: this.isRecording,
       isProcessingAudio: this.isProcessingAudio,
-      isInitialized: this.provider === 'azure' ? !!this.speechConfig : !!this.whisperCommand,
+      isInitialized: this.isAvailable(),
       sessionDuration: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0,
       retryCount: this.retryCount,
       effectiveSettings: {
@@ -1194,11 +1219,11 @@ class SpeechService extends EventEmitter {
       return !!this.whisperCommand && !!this.available;
     }
 
-    return false;
+    return this._usesCloudTranscription() && this.available;
   }
 
   isManualCaptureMode() {
-    return this.provider === 'whisper' && this._getWhisperCaptureMode() === 'manual';
+    return this._usesBufferedCapture() && this._getWhisperCaptureMode() === 'manual';
   }
 
   shutdown() {
@@ -1229,7 +1254,7 @@ class SpeechService extends EventEmitter {
   _getConfiguredProvider() {
     const provider = String(this._getSetting('speechProvider') || process.env.SPEECH_PROVIDER || '').trim().toLowerCase();
 
-    if (provider === 'azure' || provider === 'whisper') {
+    if (['azure', 'whisper', 'groq', 'gemini'].includes(provider)) {
       return provider;
     }
 
@@ -1801,7 +1826,7 @@ class SpeechService extends EventEmitter {
       return;
     }
 
-    if (this.provider === 'whisper') {
+    if (this._usesBufferedCapture()) {
       this._ingestWhisperAudio(Buffer.from(chunk));
     }
   }
@@ -1833,11 +1858,13 @@ class SpeechService extends EventEmitter {
     try {
       const transcript = await this._transcribeWhisperBuffer(audioBuffer);
       const clean = transcript ? transcript.trim() : '';
-      if (clean && !this._isHallucinatedTranscript(clean)) {
+      if (!this.discardTranscription && clean && !this._isHallucinatedTranscript(clean)) {
         this.emit('transcription', clean);
-      } else if (clean) {
-        logger.debug('Dropped likely Whisper silence hallucination', { transcript: clean });
+      } else if (!this.discardTranscription && clean) {
+        logger.debug('Dropped likely speech recognition noise');
       }
+    } catch (error) {
+      if (!this.discardTranscription) throw error;
     } finally {
       this.transcriptionInFlight = false;
 
@@ -1881,6 +1908,9 @@ class SpeechService extends EventEmitter {
   }
 
   async _transcribeWhisperBuffer(audioBuffer) {
+    if (this._usesCloudTranscription()) {
+      return transcribeCloud(this.provider, this._createWavBuffer(audioBuffer), this.cloudTranscription?.signal);
+    }
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencluely-whisper-'));
     const audioFilePath = path.join(tempDir, 'segment.wav');
 

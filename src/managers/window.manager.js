@@ -32,7 +32,7 @@ class WindowManager {
     this.focusLocked = false; // Prevent focus loops
     
     // Window binding properties
-    this.bindWindows = true; // Enable window binding by default
+    this.bindWindows = false;
     this.windowGap = 10; // Small gap between windows
     this.boundWindowsPosition = { x: 0, y: 0 }; // Track position of bound windows
     
@@ -45,8 +45,8 @@ class WindowManager {
         title: 'OpenCluely'
       },
       chat: {
-        width: 500,
-        height: 700,
+        width: 480,
+        height: 495,
         file: 'chat.html',
         title: 'Chat'
       },
@@ -58,8 +58,8 @@ class WindowManager {
         alwaysOnTop: true
       },
       settings: {
-        width: 400,
-        height: 380,
+        width: 470,
+        height: 570,
         file: 'settings.html',
         title: 'Settings',
         frame: false,
@@ -113,9 +113,7 @@ class WindowManager {
     try {
       // Pass autoShow so the main window doesn't flash visible during
       // first-run onboarding before the user has configured API keys.
-      await this.createMainWindow({ autoShow: showMainWindow });
       await this.createChatWindow();
-      await this.createLLMResponseWindow();
       await this.createSettingsWindow();
       
       this.setupWindowEventHandlers();
@@ -141,42 +139,7 @@ class WindowManager {
   }
 
   async showMainWindow() {
-    const mainWindow = this.windows.get('main');
-    if (!mainWindow) return;
-    
-    // Immediate always-on-top enforcement for main window
-    if (process.platform === 'darwin') {
-      try {
-        mainWindow.setAlwaysOnTop(true, 'screen-saver', 2);
-      } catch (error) {
-        mainWindow.setAlwaysOnTop(true, 'floating', 2);
-      }
-    } else {
-      mainWindow.setAlwaysOnTop(true);
-    }
-    
-    // Wait for app to fully initialize and detect current desktop
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    this.showOnCurrentDesktop(mainWindow);
-    
-    // Additional enforcement after showing
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    if (!mainWindow.isDestroyed()) {
-      if (process.platform === 'darwin') {
-        try {
-          mainWindow.setAlwaysOnTop(true, 'screen-saver', 2);
-        } catch (error) {
-          mainWindow.setAlwaysOnTop(true, 'floating', 2);
-        }
-      } else {
-        mainWindow.setAlwaysOnTop(true);
-      }
-    }
-    
-    this.isVisible = true;
-    logger.info('Main window displayed');
-    // Notify renderer to refresh speech availability
-    mainWindow.webContents.send('main-window-shown', {});
+    this.showChatWindow();
   }
 
   async createMainWindow(options = {}) {
@@ -392,14 +355,14 @@ class WindowManager {
       // Chat window - frameless without window controls
       browserWindowOptions = {
         ...baseOptions,
-        minWidth: config.get('window.minWidth'),
-        minHeight: config.get('window.minHeight'),
+        minWidth: 228,
+        minHeight: 48,
         maxWidth: config.get('window.maxWidth'),
         maxHeight: config.get('window.maxHeight'),
         frame: false,
         titleBarStyle: 'hidden',
         transparent: true,
-        resizable: true,
+        resizable: false,
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -1011,7 +974,6 @@ class WindowManager {
     this.windows.forEach((window, type) => {
       if (!window.isDestroyed()) {
         window.hide();
-        window.setPosition(-10000, -10000);
       }
     });
   }
@@ -1026,65 +988,18 @@ class WindowManager {
   }
 
   switchToWindow(windowType) {
-    if (this.windows.has('chat') && this.windows.get('chat').isVisible()) {
-      this.hideChatWindow();
-      return;
-    }
-
-    if (!this.windowConfigs[windowType]) {
-      logger.warn('Attempted to switch to unknown window type', { windowType });
-      return;
-    }
-
-    if (this.isScreenBeingShared) {
-      return;
-    }
-
-    const targetWindow = this.windows.get(windowType);
-    if (targetWindow) {
-      this.showOnCurrentDesktop(targetWindow);
-
-      this.activeWindow = windowType;
-      
-      logger.info('Switched to window', {
-        windowType,
-        isVisible: this.isVisible
-      });
-    }
+    if (windowType === 'chat') this.showChatWindow();
   }
 
   showAllWindows() {
-    if (this.isScreenBeingShared) {
-      return;
-    }
-
-    this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
-        this.showOnCurrentDesktop(window);
-      }
-    });
-    
-    this.isVisible = true;
-    const activeWindow = this.windows.get(this.activeWindow);
-    if (activeWindow) {
-      activeWindow.focus();
-    }
-    
-    logger.info('All windows shown on current desktop', { 
-      activeWindow: this.activeWindow,
-      windowCount: this.windows.size 
-    });
+    this.showChatWindow();
   }
 
   hideAllWindows() {
-    this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') {
-        window.hide();
-      }
+    this.windows.forEach(window => {
+      if (!window.isDestroyed()) window.hide();
     });
-    
     this.isVisible = false;
-    logger.info('All windows hidden');
   }
 
   toggleVisibility() {
@@ -1622,7 +1537,7 @@ class WindowManager {
     }
     
     this.windows.forEach((window, type) => {
-      if (window && !window.isDestroyed()) {
+      if (type !== 'chat' && window && !window.isDestroyed()) {
         // Skip main and llmResponse if they're bound (already handled above)
         if (this.bindWindows && (type === 'main' || type === 'llmResponse')) {
           return;
@@ -1777,9 +1692,11 @@ class WindowManager {
   }
 
   showChatWindow() {
+    if (this.isScreenBeingShared) return;
     const chatWindow = this.windows.get('chat');
     if (chatWindow && !chatWindow.isDestroyed()) {
       this.showOnCurrentDesktop(chatWindow);
+      this.isVisible = true;
       logger.debug('Chat window shown');
     }
   }
@@ -1792,11 +1709,11 @@ class WindowManager {
     }
   }
 
-  handleRecordingStarted() {
+  handleRecordingStarted(provider) {
     this.isRecording = true;
     this.showChatWindow();
     // Notify all windows about recording state
-    this.broadcastToAllWindows('recording-started');
+    this.broadcastToAllWindows('recording-started', { provider });
     logger.debug('Recording started, chat window shown');
   }
 

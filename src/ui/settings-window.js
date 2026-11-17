@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const whisperLanguageInput = document.getElementById('whisperLanguage');
     const whisperDeviceSelect = document.getElementById('whisperDevice');
     const whisperCaptureModeSelect = document.getElementById('whisperCaptureMode');
-    const whisperResponseTargetSelect = document.getElementById('whisperResponseTarget');
     const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
     const geminiKeyInput = document.getElementById('geminiKey');
     const windowGapInput = document.getElementById('windowGap');
@@ -74,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Function to load settings into UI
     const loadSettingsIntoUI = (settings) => {
-        if (settings.speechProvider && speechProviderSelect) speechProviderSelect.value = settings.speechProvider;
+        if (settings.speechProvider && speechProviderSelect) setInlinePickerValue(speechProviderSelect, settings.speechProvider);
         // Always set the input value, even if empty, so the user sees what's
         // currently configured (including env-derived defaults). Previously
         // empty strings were skipped which left stale UI values.
@@ -83,19 +82,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperCommandInput) whisperCommandInput.value = settings.whisperCommand || '';
         if (whisperModelInput) whisperModelInput.value = settings.whisperModel || '';
         if (whisperLanguageInput) whisperLanguageInput.value = settings.whisperLanguage || '';
-        if (whisperDeviceSelect) whisperDeviceSelect.value = settings.whisperDevice || 'auto';
-        if (whisperCaptureModeSelect) whisperCaptureModeSelect.value = settings.whisperCaptureMode || 'vad';
-        if (whisperResponseTargetSelect) whisperResponseTargetSelect.value = settings.whisperResponseTarget || 'both';
+        if (whisperDeviceSelect) setInlinePickerValue(whisperDeviceSelect, settings.whisperDevice || 'auto');
+        if (whisperCaptureModeSelect) setInlinePickerValue(whisperCaptureModeSelect, settings.whisperCaptureMode || 'vad');
         if (whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs || '';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
         if (windowGapInput) windowGapInput.value = settings.windowGap || '';
 
         // Set C++ as default if no coding language is specified
         if (codingLanguageSelect) {
-            codingLanguageSelect.value = settings.codingLanguage || 'cpp';
+            setInlinePickerValue(codingLanguageSelect, settings.codingLanguage || 'cpp');
         }
 
-        if (settings.activeSkill && activeSkillSelect) activeSkillSelect.value = settings.activeSkill;
+        if (settings.activeSkill && activeSkillSelect) setInlinePickerValue(activeSkillSelect, settings.activeSkill);
 
         // Handle icon selection
         const selectedIcon = settings.selectedIcon || settings.appIcon;
@@ -127,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Listen for coding language changes from other windows via helper
     window.electronAPI.onCodingLanguageChanged((event, data) => {
             if (data && data.language && codingLanguageSelect) {
-                codingLanguageSelect.value = data.language;
+                setInlinePickerValue(codingLanguageSelect, data.language);
                 console.log('Language updated from overlay window:', data.language);
             }
     });
@@ -144,7 +142,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperLanguageInput) settings.whisperLanguage = whisperLanguageInput.value;
         if (whisperDeviceSelect) settings.whisperDevice = whisperDeviceSelect.value;
         if (whisperCaptureModeSelect) settings.whisperCaptureMode = whisperCaptureModeSelect.value;
-        if (whisperResponseTargetSelect) settings.whisperResponseTarget = whisperResponseTargetSelect.value;
         if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
         if (windowGapInput) settings.windowGap = windowGapInput.value;
@@ -179,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (input) input.disabled = provider !== 'azure';
         });
         [whisperCommandInput, whisperModelInput, whisperLanguageInput, whisperDeviceSelect,
-            whisperCaptureModeSelect, whisperResponseTargetSelect, whisperSegmentMsInput].forEach(input => {
+            whisperCaptureModeSelect, whisperSegmentMsInput].forEach(input => {
             if (input) input.disabled = provider !== 'whisper';
         });
     };
@@ -193,7 +190,6 @@ document.addEventListener('DOMContentLoaded', () => {
         whisperLanguageInput,
         whisperDeviceSelect,
         whisperCaptureModeSelect,
-        whisperResponseTargetSelect,
         whisperSegmentMsInput,
         geminiKeyInput,
         windowGapInput
@@ -333,4 +329,4 @@ document.addEventListener('DOMContentLoaded', () => {
             window.api.send('close-settings');
         }
     });
-}); 
+});

@@ -369,7 +369,7 @@
       <div class="command-separator"></div>
       <div class="command-item" id="languageSelector">
         <i class="fas fa-code"></i>
-        <select id="codingLanguage">
+        <select id="codingLanguage" hidden size="2" data-inline-picker aria-label="Coding language">
           <option value="cpp">C++</option>
           <option value="c">C</option>
           <option value="python">Python</option>
@@ -455,6 +455,7 @@
       </div>
     </div>
 
+    <script src="./src/ui/inline-picker.js"></script>
     <script src="./src/ui/main-window.js"></script>
   </body>
 </html>

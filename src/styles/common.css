@@ -577,3 +577,43 @@ body {
     scrollbar-width: none;
     -ms-overflow-style: none;
 }
+
+.inline-picker {
+    position: relative;
+    -webkit-app-region: no-drag;
+}
+
+.inline-picker-trigger {
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    background: #232323;
+    border: 1px solid #666;
+    border-radius: 4px;
+    padding: 3px 8px;
+    white-space: nowrap;
+}
+
+.inline-picker-trigger::after {
+    content: '\25BE';
+    margin-left: 0.5em;
+}
+
+.inline-picker-trigger:focus-visible {
+    outline: 2px solid #75caff;
+    outline-offset: 1px;
+}
+
+.inline-picker select[hidden] {
+    display: none;
+}
+
+.command-item .inline-picker select {
+    position: fixed;
+    top: 34px;
+    right: 6px;
+    z-index: 20;
+    background: #1e1e1e;
+    background-image: none;
+    padding: 4px;
+}

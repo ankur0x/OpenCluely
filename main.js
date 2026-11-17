@@ -1,7 +1,9 @@
 const path = require("path");
+const { randomUUID } = require("crypto");
+const { getPanelModels, streamChat, fetchProviderModels } = require("./src/services/panel-models");
 const fs = require("fs");
 const { fileURLToPath } = require("url");
-const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
+const { app, BrowserWindow, globalShortcut, session, ipcMain, screen, nativeImage } = require("electron");
 
 // ── Resolve a stable .env location ──
 // In packaged builds process.cwd() is unstable and frequently read-only
@@ -122,6 +124,11 @@ class ApplicationController {
     // pauses). We buffer fragments and debounce so one question yields one LLM
     // call instead of several slow, half-answered ones.
     this._utteranceBuffer = "";
+    this.chatGeneration = 0;
+    this.panelSessionActive = true;
+    this.discardStoppedSpeech = false;
+    this.chatRequests = new Set();
+    this.pendingImages = new Map();
     this._utteranceTimer = null;
     this._utteranceDispatchInFlight = false;
     this._utteranceCoalesceMs = 800;
@@ -190,7 +197,7 @@ class ApplicationController {
 
     const focusExistingWindows = () => {
       try {
-        const mainWindow = windowManager.getWindow("main");
+        const mainWindow = windowManager.getWindow("chat");
         if (mainWindow) {
           if (mainWindow.isMinimized && mainWindow.isMinimized()) {
             mainWindow.restore();
@@ -250,16 +257,16 @@ class ApplicationController {
       try {
         this.firstRunManager.ensureEnv();
         status = this.firstRunManager.getStatus();
-        this.isFirstRun = status.needsOnboarding;
+        this.isFirstRun = status.needsOnboarding && !getPanelModels().chat.some(model => model.configured);
         logger.info("First-run status", status);
       } catch (e) {
         logger.warn("First-run check failed", { error: e.message });
         status = { needsOnboarding: false };
         this.isFirstRun = false;
       }
-      const isFirstRun = status.needsOnboarding;
-
-      await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
+      await windowManager.initializeWindows();
+      this.broadcastPanelState();
+      void this.refreshPanelModels();
       this.setupGlobalShortcuts();
 
       // Initialize default stealth mode with terminal icon
@@ -268,27 +275,8 @@ class ApplicationController {
       this.starting = false;
       this.isReady = true;
 
-      // Launch the onboarding wizard if this is the first run.
-      if (this.isFirstRun) {
-        // Defer slightly so all windows finish loading before we pop
-        // the wizard on top of them.
-        setTimeout(() => {
-          try {
-            windowManager.showOnboarding();
-            windowManager.broadcastToAllWindows("first-run", status);
-            logger.info("First-run onboarding: wizard opened");
-          } catch (e) {
-            logger.warn("Could not open first-run onboarding window", {
-              error: e.message
-            });
-            // Fallback to legacy settings prompt
-            try { this.showSettings(); } catch (_) { /* ignore */ }
-          }
-        }, 800);
-      } else {
-        // Already configured — mark completed so we never nag again.
-        this.firstRunManager.markCompleted();
-      }
+      if (this.isFirstRun) windowManager.showSettings();
+      this.firstRunManager.markCompleted();
 
       logger.info("Application initialized successfully", {
         windowCount: Object.keys(windowManager.getWindowStats().windows).length,
@@ -391,7 +379,10 @@ class ApplicationController {
   setupGlobalShortcuts() {
     const shortcuts = {
       "CommandOrControl+Shift+S": () => this.triggerScreenshotOCR(),
-      "CommandOrControl+Shift+V": () => windowManager.toggleVisibility(),
+      "CommandOrControl+Shift+V": () => {
+        const visible = windowManager.toggleVisibility();
+        if (!visible && speechService.getStatus().isRecording) speechService.stopRecording();
+      },
       "CommandOrControl+Shift+I": () => windowManager.toggleInteraction(),
       "CommandOrControl+Shift+C": () => windowManager.switchToWindow("chat"),
       "CommandOrControl+Shift+\\": () => this.clearSessionMemory(),
@@ -403,11 +394,6 @@ class ApplicationController {
         const results = windowManager.testAlwaysOnTopForAllWindows();
         logger.info('Always-on-top test triggered via shortcut', results);
       },
-      // Context-sensitive shortcuts based on interaction mode
-      "CommandOrControl+Up": () => this.handleUpArrow(),
-      "CommandOrControl+Down": () => this.handleDownArrow(),
-      "CommandOrControl+Left": () => this.handleLeftArrow(),
-      "CommandOrControl+Right": () => this.handleRightArrow(),
     };
 
     Object.entries(shortcuts).forEach(([accelerator, handler]) => {
@@ -418,7 +404,8 @@ class ApplicationController {
 
   setupServiceEventHandlers() {
     speechService.on("recording-started", () => {
-      windowManager.handleRecordingStarted();
+      this.discardStoppedSpeech = false;
+      windowManager.handleRecordingStarted(speechService.provider);
     });
 
     speechService.on("recording-stopped", () => {
@@ -456,7 +443,56 @@ class ApplicationController {
   }
 
   setupIPCHandlers() {
-  ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
+    ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
+    ipcMain.handle("get-panel-state", event => {
+      if (this.isPanelOrSettingsSender(event.sender)) return this.getPanelState();
+    });
+    ipcMain.handle("refresh-panel-models", event => {
+      if (this.isPanelOrSettingsSender(event.sender)) return this.refreshPanelModels();
+    });
+    ipcMain.handle("set-panel-session", (event, active) => {
+      if (!this.isChatSender(event.sender) || typeof active !== 'boolean') return { success: false };
+      this.panelSessionActive = active;
+      if (!active) {
+        this.discardStoppedSpeech = true;
+        this.cancelChatWork();
+        speechService.stopRecording({ discard: true });
+      }
+      this.broadcastPanelState();
+      return { success: true };
+    });
+    ipcMain.handle("select-panel-model", (event, kind, id, model) => {
+      if (!this.isPanelOrSettingsSender(event.sender)) return { success: false };
+      return this.selectPanelModel(kind, id, model);
+    });
+    ipcMain.handle("collapse-panel", (event, collapsed) => {
+      if (!this.isChatSender(event.sender) || typeof collapsed !== 'boolean') return { success: false };
+      const panel = BrowserWindow.fromWebContents(event.sender);
+      const bounds = panel.getBounds();
+      const work = screen.getDisplayMatching(bounds).workArea;
+      const width = Math.min(work.width, collapsed ? 234 : 480);
+      const height = Math.min(work.height, collapsed ? 54 : 495);
+      panel.setBounds({
+        x: Math.max(work.x, Math.min(Math.round(bounds.x + (bounds.width - width) / 2), work.x + work.width - width)),
+        y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)),
+        width, height
+      });
+      return { success: true };
+    });
+    ipcMain.handle("discard-chat-image", (event, id) => {
+      return { success: this.isChatSender(event.sender) && this.pendingImages.delete(id) };
+    });
+    ipcMain.handle("attach-chat-image", (event, bytes) => {
+      if (!this.isChatSender(event.sender) || !this.panelSessionActive) return { success: false };
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength < 1 || bytes.byteLength > 12 * 1024 * 1024) {
+        return { success: false, error: 'Choose an image under 12 MB.' };
+      }
+      try {
+        return this.stageChatImage(Buffer.from(bytes));
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    });
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
     
@@ -477,7 +513,7 @@ class ApplicationController {
     });
 
     ipcMain.handle("start-speech-recognition", () => {
-      speechService.startRecording();
+      if (this.panelSessionActive) speechService.startRecording();
       return speechService.getStatus();
     });
 
@@ -487,15 +523,15 @@ class ApplicationController {
     });
 
     // Raw PCM audio captured by the renderer's Web Audio API (Windows Whisper path)
-    ipcMain.on("audio-chunk", (_event, data) => {
-      if (data && data.buffer) {
+    ipcMain.on("audio-chunk", (event, data) => {
+      if (this.panelSessionActive && this.isChatSender(event.sender) && data && data.buffer) {
         speechService.handleAudioChunkFromRenderer(Buffer.from(data.buffer));
       }
     });
 
     // Also handle direct send events for fallback
     ipcMain.on("start-speech-recognition", () => {
-      speechService.startRecording();
+      if (this.panelSessionActive) speechService.startRecording();
     });
 
     ipcMain.on("stop-speech-recognition", () => {
@@ -602,8 +638,7 @@ class ApplicationController {
     });
 
     ipcMain.handle("clear-session-memory", () => {
-      sessionManager.clear();
-      windowManager.broadcastToAllWindows("session-cleared");
+      this.clearSessionMemory();
       return { success: true };
     });
 
@@ -617,27 +652,15 @@ class ApplicationController {
       return { success: true, results };
     });
 
-    ipcMain.handle("send-chat-message", async (event, text) => {
-      // Add chat message to session memory
-      sessionManager.addUserInput(text, 'chat');
-      logger.debug('Chat message added to session memory', { textLength: text.length });
-
-      // Typed messages need the full skill pipeline (with history context),
-      // NOT the voice "intelligent filter" pipeline. Voice keeps its filter
-      // behaviour; typed chat goes through processWithLLM so it gets real
-      // answers using the active skill prompt and recent conversation history.
-      (async () => {
-        try {
-          const sessionHistory = sessionManager.getOptimizedHistory();
-          await this.processWithLLM(text, sessionHistory);
-        } catch (error) {
-          logger.error("Failed to process chat message with LLM", {
-            error: error.message,
-            text: text.substring(0, 100)
-          });
-        }
-      })();
-
+    ipcMain.handle("send-chat-message", (event, text, imageIds = []) => {
+      if (!this.panelSessionActive || !this.isChatSender(event.sender) || typeof text !== 'string' ||
+          !Array.isArray(imageIds) || imageIds.length > 8 || new Set(imageIds).size !== imageIds.length) {
+        return { success: false };
+      }
+      const images = imageIds.map(id => this.pendingImages.get(id));
+      if (images.some(image => !image) || (!text.trim() && !images.length)) return { success: false };
+      for (const id of imageIds) this.pendingImages.delete(id);
+      void this.processChatTurn(text.trim(), { images });
       return { success: true };
     });
 
@@ -727,8 +750,10 @@ class ApplicationController {
       return { success: true };
     });
 
-    ipcMain.handle("get-settings", () => {
-      return this.getSettings();
+    ipcMain.handle("get-settings", event => {
+      const settingsWindow = windowManager.getWindow("settings");
+      const onboarding = windowManager.getWindow("onboarding");
+      if ([settingsWindow, onboarding].some(win => win && !win.isDestroyed() && win.webContents === event.sender)) return this.getSettings();
     });
 
     // First-run onboarding status — renderer can query to know whether
@@ -862,13 +887,12 @@ class ApplicationController {
     });
 
     ipcMain.handle("close-window", (event) => {
-      const webContents = event.sender;
-      const window = windowManager.windows.forEach((win, type) => {
-        if (win.webContents === webContents) {
-          win.hide();
-          return true;
-        }
-      });
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || window.isDestroyed()) return { success: false };
+      if (this.isChatSender(event.sender) && speechService.getStatus().isRecording) {
+        speechService.stopRecording();
+      }
+      window.hide();
       return { success: true };
     });
 
@@ -945,6 +969,7 @@ class ApplicationController {
   }
 
   toggleSpeechRecognition() {
+    if (!this.panelSessionActive) return;
     const isAvailable = typeof speechService.isAvailable === 'function' ? speechService.isAvailable() : !!speechService.getStatus?.().isInitialized;
     if (!isAvailable) {
       logger.warn("Speech recognition unavailable; toggle ignored");
@@ -975,6 +1000,7 @@ class ApplicationController {
 
   clearSessionMemory() {
     try {
+      this.cancelChatWork();
       sessionManager.clear();
       windowManager.broadcastToAllWindows("session-cleared");
       logger.info("Session memory cleared via global shortcut");
@@ -1065,159 +1091,136 @@ class ApplicationController {
     windowManager.broadcastToAllWindows("skill-updated", { skill: newSkill });
   }
 
-  async triggerScreenshotOCR() {
-    if (!this.isReady) {
-      logger.warn("Screenshot requested before application ready");
-      return;
-    }
+  getPanelState() {
+    const speech = speechService.getStatus();
+    return { ...getPanelModels(), active: this.panelSessionActive, recording: speech.isRecording, speechAvailable: speechService.isAvailable() };
+  }
 
-    const startTime = Date.now();
-
-    try {
-      windowManager.showLLMLoading();
-
-  const capture = await captureService.captureAndProcess();
-
-      if (!capture.imageBuffer || !capture.imageBuffer.length) {
-        windowManager.hideLLMResponse();
-        this.broadcastOCRError("Failed to capture screenshot image");
-        return;
-      }
-
-      // Use image directly with LLM and active skill; do not send chat messages here
-      const sessionHistory = sessionManager.getOptimizedHistory();
-
-      const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
-      this._responseSeq = (this._responseSeq || 0) + 1;
-      const messageId = `img-${Date.now()}-${this._responseSeq}`;
-      windowManager.broadcastToAllWindows("transcription-llm-response-start", {
-        messageId,
-        skill: this.activeSkill
-      });
-
-      const llmResult = await llmService.processImageWithSkillStream(
-        capture.imageBuffer,
-        capture.mimeType || 'image/png',
-        this.activeSkill,
-        sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null,
-        (delta) => {
-          windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
-            messageId,
-            delta
-          });
-        }
-      );
-      llmResult.metadata = { ...llmResult.metadata, messageId };
-
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-
-      this.broadcastTranscriptionLLMResponse(llmResult);
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isImageAnalysis: true
-      });
-    } catch (error) {
-      logger.error("Screenshot OCR process failed", {
-        error: error.message,
-        duration: Date.now() - startTime,
-      });
-
-      windowManager.hideLLMResponse();
-      this.broadcastOCRError(error.message);
-      
-      sessionManager.addConversationEvent({
-        role: 'system',
-        content: `Screenshot OCR failed: ${error.message}`,
-        action: 'ocr_error',
-        metadata: {
-          error: error.message
-        }
-      });
+  broadcastPanelState() {
+    const state = this.getPanelState();
+    for (const type of ['chat', 'settings']) {
+      const window = windowManager.getWindow(type);
+      if (window && !window.isDestroyed()) window.webContents.send("panel-state", state);
     }
   }
 
-  async processWithLLM(text, sessionHistory) {
+  async refreshPanelModels() {
+    const catalogs = await fetchProviderModels();
+    this.broadcastPanelState();
+    return catalogs;
+  }
+
+  isPanelOrSettingsSender(sender) {
+    const settings = windowManager.getWindow("settings");
+    return this.isChatSender(sender) || Boolean(settings && !settings.isDestroyed() && settings.webContents === sender);
+  }
+
+  selectPanelModel(kind, id, model) {
+    const options = getPanelModels();
+    const provider = options.chat.find(option => option.id === id && option.configured);
+    if (kind === 'chat' && provider && (model === undefined || provider.models.includes(model))) {
+      return this.saveSettings({ chatProvider: id, chatModel: model || provider.models[0] });
+    }
+    if (kind === 'voice' && options.voice.some(option => option.id === id)) {
+      if (speechService.getStatus().isRecording || speechService.isProcessingAudio || this._utteranceBuffer) {
+        return { success: false, error: 'Turn off the microphone and wait for transcription before switching voice models.' };
+      }
+      if (id === 'azure') return this.saveSettings({ speechProvider: 'azure' });
+      const [speechProvider, voiceModel] = id.split(':');
+      const field = { whisper: 'whisperModel', groq: 'groqVoiceModel', gemini: 'geminiVoiceModel' }[speechProvider];
+      return this.saveSettings({ speechProvider, [field]: voiceModel });
+    }
+    return { success: false, error: 'Add this provider and model in Settings first.' };
+  }
+
+  cancelChatWork() {
+    this.chatGeneration++;
+    this.pendingImages.clear();
+    this._utteranceBuffer = "";
+    clearTimeout(this._utteranceTimer);
+    this._utteranceTimer = null;
+    for (const request of this.chatRequests) request.abort();
+    this.chatRequests.clear();
+  }
+
+  isChatSender(sender) {
+    const chat = windowManager.getWindow("chat");
+    return Boolean(chat && !chat.isDestroyed() && chat.webContents === sender);
+  }
+
+  stageChatImage(buffer) {
+    if (this.pendingImages.size >= 8) throw new Error('Attach up to eight images per message.');
+    let image = nativeImage.createFromBuffer(buffer);
+    if (image.isEmpty()) throw new Error('Could not read the image. Use PNG or JPEG.');
+    const { width, height } = image.getSize();
+    if (Math.max(width, height) > 1920) {
+      const dimension = width >= height ? { width: 1920 } : { height: 1920 };
+      image = image.resize({ ...dimension, quality: 'good' });
+    }
+    let imageBuffer = image.toJPEG(87);
+    if (imageBuffer.length > 1024 * 1024) imageBuffer = image.toJPEG(62);
+    if (imageBuffer.length > 1024 * 1024) throw new Error('The image is too detailed. Crop it and try again.');
+    const id = randomUUID();
+    const attachment = { id, imageBuffer, mimeType: 'image/jpeg' };
+    this.pendingImages.set(id, attachment);
+    this.sendToChatWindow("chat-screenshot-ready", this.describeChatImage(attachment));
+    return { success: true };
+  }
+
+  describeChatImage({ id, imageBuffer, mimeType }) {
+    return { id, preview: 'data:' + mimeType + ';base64,' + imageBuffer.toString('base64') };
+  }
+
+  async triggerScreenshotOCR() {
+    if (!this.isReady || !this.panelSessionActive) return { success: false };
+    const generation = this.chatGeneration;
     try {
-      // Add user input to session memory
-      sessionManager.addUserInput(text, 'llm_input');
-
-      // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
-      this._responseSeq = (this._responseSeq || 0) + 1;
-      const messageId = `chat-${Date.now()}-${this._responseSeq}`;
-      windowManager.broadcastToAllWindows("transcription-llm-response-start", {
-        messageId,
-        skill: this.activeSkill
-      });
-      windowManager.showLLMLoading();
-
-      const llmResult = await llmService.processTextWithSkillStream(
-        text,
-        this.activeSkill,
-        sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null,
-        (delta) => {
-          windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
-            messageId,
-            delta
-          });
-        }
-      );
-      llmResult.metadata = { ...llmResult.metadata, messageId };
-
-      logger.info("LLM processing completed, showing response", {
-        responseLength: llmResult.response.length,
-        skill: this.activeSkill,
-        programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
-        processingTime: llmResult.metadata.processingTime,
-        responsePreview: llmResult.response.substring(0, 200) + "...",
-      });
-
-      // Add LLM response to session memory
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-      });
-
-      this.broadcastTranscriptionLLMResponse(llmResult);
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-      });
+      const displayId = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id;
+      const capture = await captureService.captureAndProcess({ displayId });
+      if (generation !== this.chatGeneration) return { success: false };
+      if (!capture.imageBuffer?.length) throw new Error("No screenshot was captured.");
+      this.stageChatImage(capture.imageBuffer);
+      windowManager.showChatWindow();
+      return { success: true };
     } catch (error) {
-      logger.error("LLM processing failed", {
-        error: error.message,
-        skill: this.activeSkill,
-      });
+      if (generation === this.chatGeneration) {
+        this.sendToChatWindow("chat-request-error", { error: error.message });
+        windowManager.showChatWindow();
+      }
+      return { success: false };
+    }
+  }
 
-      windowManager.hideLLMResponse();
-      sessionManager.addConversationEvent({
-        role: 'system',
-        content: `LLM processing failed: ${error.message}`,
-        action: 'llm_error',
-        metadata: {
-          error: error.message,
-          skill: this.activeSkill
-        }
-      });
-
-      this.broadcastLLMError(error.message);
+  async processChatTurn(text, { images = [], source = 'chat' } = {}) {
+    if (!this.panelSessionActive) return;
+    const generation = this.chatGeneration;
+    const { selectedChat: provider, selectedChatModel: model } = getPanelModels();
+    const request = new AbortController();
+    this.chatRequests.add(request);
+    this._responseSeq = (this._responseSeq || 0) + 1;
+    const messageId = `chat-${this._responseSeq}`;
+    const publish = (channel, data) => {
+      if (generation === this.chatGeneration) this.sendToChatWindow(channel, { messageId, ...data });
+    };
+    const history = sessionManager.getConversationHistory();
+    const type = source === 'speech' ? 'transcription' : 'user';
+    publish("chat-user-message", { type, text, images: images.map(image => this.describeChatImage(image)) });
+    sessionManager.addUserInput(text || 'Attached ' + images.length + ' image(s)', source);
+    publish("transcription-llm-response-start", {});
+    try {
+      const onDelta = (delta) => publish("transcription-llm-response-chunk", { delta });
+      const signal = request.signal;
+      const result = await streamChat({ provider, model, text, images, history, onDelta, signal });
+      if (generation !== this.chatGeneration) return;
+      sessionManager.addModelResponse(result.response, { isImageAnalysis: images.length > 0 });
+      publish("transcription-llm-response", { response: result.response });
+    } catch (error) {
+      if (!request.signal.aborted) {
+        logger.warn("Chat request failed", { error: error.message, source });
+        publish("chat-request-error", { error: error.message });
+      }
+    } finally {
+      this.chatRequests.delete(request);
     }
   }
 
@@ -1228,14 +1231,12 @@ class ApplicationController {
    * line from producing two separate, slow answers.
    */
   handleTranscriptionFragment(text) {
+    if (!this.panelSessionActive || this.discardStoppedSpeech) return;
     const fragment = (text || "").trim();
     if (!fragment) {
       return;
     }
 
-    // Route speech UI events according to the user's response-target setting.
-    sessionManager.addUserInput(fragment, 'speech');
-    this.sendToVoiceResponseWindows("transcription-received", { text: fragment });
 
     this._utteranceBuffer = this._utteranceBuffer
       ? `${this._utteranceBuffer} ${fragment}`
@@ -1276,8 +1277,8 @@ class ApplicationController {
     this._utteranceDispatchInFlight = true;
 
     try {
-      const sessionHistory = sessionManager.getOptimizedHistory();
-      await this.processTranscriptionWithLLM(combined, sessionHistory);
+
+      await this.processChatTurn(combined, { source: 'speech' });
     } catch (error) {
       logger.error("Failed to process transcription with LLM", {
         error: error.message,
@@ -1288,147 +1289,6 @@ class ApplicationController {
       // Anything that arrived while we were busy gets answered now.
       if (this._utteranceBuffer.trim()) {
         this.dispatchCoalescedUtterance();
-      }
-    }
-  }
-
-  async processTranscriptionWithLLM(text, sessionHistory) {
-    // Hoisted so the catch block can tie a fallback answer to the same UI
-    // bubble the streaming start event created; otherwise a total failure
-    // leaves an empty streamed bubble stranded next to the fallback message.
-    let messageId = null;
-    try {
-      // Validate input text
-      if (!text || typeof text !== 'string' || text.trim().length === 0) {
-        logger.warn("Skipping LLM processing for empty or invalid transcription", {
-          textType: typeof text,
-          textLength: text ? text.length : 0
-        });
-        return;
-      }
-
-      const cleanText = text.trim();
-      if (cleanText.length < 2) {
-        logger.debug("Skipping LLM processing for very short transcription", {
-          text: cleanText
-        });
-        return;
-      }
-
-      logger.info("Processing transcription with intelligent LLM response", {
-        skill: this.activeSkill,
-        textLength: cleanText.length,
-        textPreview: cleanText.substring(0, 100) + "..."
-      });
-
-      // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
-
-      // Stream the answer progressively to the configured speech target.
-      // A unique messageId ties the start/chunk/final events to one bubble so
-      // the UI never duplicates or interleaves concurrent responses.
-      this._responseSeq = (this._responseSeq || 0) + 1;
-      messageId = `tr-${Date.now()}-${this._responseSeq}`;
-      this.sendToVoiceResponseWindows("transcription-llm-response-start", {
-        messageId,
-        skill: this.activeSkill
-      });
-      if (this.shouldShowVoiceOverlay()) {
-        windowManager.showLLMLoading();
-      }
-      const llmResult = await llmService.processTranscriptionWithIntelligentResponseStream(
-        cleanText,
-        this.activeSkill,
-        sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null,
-        (delta) => {
-          this.sendToVoiceResponseWindows("transcription-llm-response-chunk", {
-            messageId,
-            delta
-          });
-        }
-      );
-      llmResult.metadata = { ...llmResult.metadata, messageId };
-
-      // Add LLM response to session memory
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isTranscriptionResponse: true
-      });
-
-      this.sendTranscriptionLLMResponseToVoiceTargets(llmResult);
-      if (this.shouldShowVoiceOverlay()) {
-        windowManager.showLLMResponse(llmResult.response, {
-          skill: this.activeSkill,
-          processingTime: llmResult.metadata.processingTime,
-          usedFallback: llmResult.metadata.usedFallback,
-          isTranscriptionResponse: true
-        });
-      }
-
-      logger.info("Transcription LLM response completed", {
-        responseLength: llmResult.response.length,
-        skill: this.activeSkill,
-        programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
-        processingTime: llmResult.metadata.processingTime
-      });
-
-    } catch (error) {
-      logger.error("Transcription LLM processing failed", {
-        error: error.message,
-        errorStack: error.stack,
-        skill: this.activeSkill,
-        text: text ? text.substring(0, 100) : 'undefined'
-      });
-
-      // Try to provide a fallback response
-      try {
-        const fallbackResult = llmService.generateIntelligentFallbackResponse(text, this.activeSkill);
-        // Carry the streaming messageId so the target replaces the live
-        // bubble instead of leaving it stuck and appending a duplicate.
-        if (messageId) {
-          fallbackResult.metadata = { ...fallbackResult.metadata, messageId };
-        }
-
-        sessionManager.addModelResponse(fallbackResult.response, {
-          skill: this.activeSkill,
-          processingTime: fallbackResult.metadata.processingTime,
-          usedFallback: true,
-          isTranscriptionResponse: true,
-          fallbackReason: error.message
-        });
-
-        this.sendTranscriptionLLMResponseToVoiceTargets(fallbackResult);
-        if (this.shouldShowVoiceOverlay()) {
-          windowManager.showLLMResponse(fallbackResult.response, {
-            skill: this.activeSkill,
-            processingTime: fallbackResult.metadata.processingTime,
-            usedFallback: true,
-            isTranscriptionResponse: true
-          });
-        }
-        logger.info("Used fallback response for transcription", {
-          skill: this.activeSkill,
-          fallbackResponse: fallbackResult.response
-        });
-        
-      } catch (fallbackError) {
-        logger.error("Fallback response also failed", {
-          fallbackError: fallbackError.message
-        });
-
-        sessionManager.addConversationEvent({
-          role: 'system',
-          content: `Transcription LLM processing failed: ${error.message}`,
-          action: 'transcription_llm_error',
-          metadata: {
-            error: error.message,
-            skill: this.activeSkill
-          }
-        });
       }
     }
   }
@@ -1498,38 +1358,7 @@ class ApplicationController {
     chatWindow.webContents.send(channel, data);
   }
 
-  getVoiceResponseTarget() {
-    const configured = String(process.env.WHISPER_RESPONSE_TARGET || 'both').trim().toLowerCase();
-    return ['chat', 'overlay', 'both'].includes(configured) ? configured : 'both';
-  }
 
-  shouldShowVoiceOverlay() {
-    return ['overlay', 'both'].includes(this.getVoiceResponseTarget());
-  }
-
-  sendToVoiceResponseWindows(channel, data) {
-    const target = this.getVoiceResponseTarget();
-    if (target === 'chat' || target === 'both') {
-      this.sendToChatWindow(channel, data);
-    }
-    if (target === 'overlay' || target === 'both') {
-      const responseWindow = windowManager.getWindow("llmResponse");
-      if (responseWindow && !responseWindow.isDestroyed()) {
-        responseWindow.webContents.send(channel, data);
-      }
-    }
-  }
-
-  sendTranscriptionLLMResponseToVoiceTargets(llmResult) {
-    const data = {
-      response: llmResult.response,
-      metadata: llmResult.metadata,
-      messageId: llmResult.metadata && llmResult.metadata.messageId,
-      skill: this.activeSkill,
-      isTranscriptionResponse: true
-    };
-    this.sendToVoiceResponseWindows("transcription-llm-response", data);
-  }
 
   onWindowAllClosed() {
     if (process.platform !== "darwin") {
@@ -1604,9 +1433,19 @@ class ApplicationController {
       whisperDevice: process.env.WHISPER_DEVICE || "auto",
       whisperCaptureMode: process.env.WHISPER_CAPTURE_MODE ||
         (process.env.WHISPER_MANUAL_CAPTURE === "true" ? "manual" : "vad"),
-      whisperResponseTarget: process.env.WHISPER_RESPONSE_TARGET || "both",
       whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
+      geminiModel: process.env.GEMINI_MODEL || "",
+      openRouterKey: process.env.OPENROUTER_API_KEY || "",
+      ollamaModel: process.env.OLLAMA_MODEL || "",
+      groqKey: process.env.GROQ_API_KEY || "",
+      groqModels: process.env.GROQ_MODELS || "",
+      openAIKey: process.env.OPENAI_API_KEY || "",
+      openAIModels: process.env.OPENAI_MODELS || "",
+      claudeKey: process.env.ANTHROPIC_API_KEY || "",
+      claudeModels: process.env.CLAUDE_MODELS || "",
+      geminiVoiceModel: process.env.GEMINI_VOICE_MODEL || "",
+      chatProvider: getPanelModels().selectedChat,
 
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
@@ -1645,7 +1484,7 @@ class ApplicationController {
       // Writing to .env ensures they survive app restarts and are picked
       // up the next time the app boots.
       const envUpdates = {};
-      if (settings.speechProvider === "azure" || settings.speechProvider === "whisper") {
+      if (["azure", "whisper", "groq", "gemini"].includes(settings.speechProvider)) {
         envUpdates.SPEECH_PROVIDER = settings.speechProvider;
       }
       if (settings.azureKey !== undefined) {
@@ -1669,9 +1508,6 @@ class ApplicationController {
       if (["manual", "vad"].includes(settings.whisperCaptureMode)) {
         envUpdates.WHISPER_CAPTURE_MODE = settings.whisperCaptureMode;
       }
-      if (["chat", "overlay", "both"].includes(settings.whisperResponseTarget)) {
-        envUpdates.WHISPER_RESPONSE_TARGET = settings.whisperResponseTarget;
-      }
       if (settings.whisperSegmentMs !== undefined) {
         envUpdates.WHISPER_SEGMENT_MS = String(settings.whisperSegmentMs);
       }
@@ -1679,70 +1515,48 @@ class ApplicationController {
         envUpdates.GEMINI_API_KEY = settings.geminiKey;
       }
 
-      // Capture the previous whisper command BEFORE persisting — persistEnvUpdates
-      // mutates process.env in place, so comparing afterwards would always read
-      // equal and skip the speech re-init below (the exact stale-mic-after-install
-      // bug the re-init guards against).
-      const prevWhisperCommand = process.env.WHISPER_COMMAND || '';
-
+      for (const [field, envKey] of Object.entries({
+        geminiModel: 'GEMINI_MODEL', openRouterKey: 'OPENROUTER_API_KEY', ollamaModel: 'OLLAMA_MODEL',
+        groqKey: 'GROQ_API_KEY', groqModels: 'GROQ_MODELS', groqVoiceModel: 'GROQ_VOICE_MODEL',
+        openAIKey: 'OPENAI_API_KEY', openAIModels: 'OPENAI_MODELS',
+        claudeKey: 'ANTHROPIC_API_KEY', claudeModels: 'CLAUDE_MODELS', geminiVoiceModel: 'GEMINI_VOICE_MODEL'
+      })) {
+        if (typeof settings[field] === 'string') {
+          const value = settings[field].trim();
+          if (field === 'geminiVoiceModel' && value && !/^[a-zA-Z0-9._-]+$/.test(value)) {
+            return { success: false, error: 'Enter one Gemini voice model ID.' };
+          }
+          envUpdates[envKey] = value;
+        }
+      }
+      if (getPanelModels().chat.some(provider => provider.id === settings.chatProvider)) {
+        envUpdates.CHAT_PROVIDER = settings.chatProvider;
+        if (settings.chatModel) envUpdates.CHAT_MODEL = settings.chatModel;
+      }
+      const hasSpeechChanges = ['SPEECH_PROVIDER', 'AZURE_SPEECH_KEY', 'AZURE_SPEECH_REGION', 'WHISPER_COMMAND', 'WHISPER_MODEL', 'WHISPER_DEVICE', 'GROQ_VOICE_MODEL', 'GEMINI_VOICE_MODEL',
+        ...(speechService.provider === 'groq' ? ['GROQ_API_KEY'] : []),
+        ...(speechService.provider === 'gemini' ? ['GEMINI_API_KEY'] : [])]
+        .some(key => Object.hasOwn(envUpdates, key) && String(envUpdates[key]) !== (process.env[key] || ''));
+      if (hasSpeechChanges && (speechService.getStatus().isRecording || speechService.isProcessingAudio)) {
+        return { success: false, error: 'Turn off the microphone before changing speech settings.' };
+      }
+      const changedGemini = ['GEMINI_API_KEY', 'GEMINI_MODEL']
+        .some(key => Object.hasOwn(envUpdates, key) && String(envUpdates[key]) !== (process.env[key] || ''));
+      const catalogChanged = ['GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
+        .some(key => Object.hasOwn(envUpdates, key) && String(envUpdates[key]) !== (process.env[key] || ''));
       const persistedKeys = this.persistEnvUpdates(envUpdates);
-
-      // If the Gemini key was just saved, reinitialize the LLM service
-      // so the new client picks up the key. Without this, the test-
-      // connection button in the onboarding wizard fails with
-      // "Service not initialized" because the client was first created
-      // at app startup, before any key was set.
-      if (settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined) {
-        try {
-          llmService.initializeClient();
-          logger.info("LLM service reinitialized after Gemini key update");
-        } catch (e) {
-          logger.warn("Failed to reinitialize LLM service after Gemini key update", {
-            error: e.message
-          });
-        }
+      if (persistedKeys.length !== Object.keys(envUpdates).length) {
+        return { success: false, error: 'Could not save provider settings to disk.' };
       }
-
-      // Reinitialize speech service when provider OR whisper command
-      // changes. Without the second check, the install flow (which
-      // writes a new whisperCommand after install but keeps the same
-      // provider) would leave the speech service pointing at a stale
-      // (or non-existent) binary, and the main overlay's mic button
-      // would stay hidden / non-functional.
-      const providerChanged = settings.speechProvider && speechService.provider !== settings.speechProvider;
-      const whisperCommandChanged = settings.whisperCommand !== undefined &&
-        prevWhisperCommand !== String(settings.whisperCommand || '');
-      if (providerChanged || whisperCommandChanged) {
-        try {
-          speechService.initializeClient();
-          this.speechAvailable = speechService.isAvailable
-            ? speechService.isAvailable()
-            : false;
-          // Broadcast so any open window (settings, overlay, chat)
-          // can react immediately — especially the main overlay's
-          // mic button, which queries availability on load.
-          const { BrowserWindow } = require("electron");
-          BrowserWindow.getAllWindows().forEach((win) => {
-            if (!win.isDestroyed()) {
-              win.webContents.send("speech-availability", { available: this.speechAvailable });
-            }
-          });
-          logger.info('Speech service reinitialized after settings change', {
-            providerChanged,
-            whisperCommandChanged,
-            speechAvailable: this.speechAvailable,
-          });
-        } catch (e) {
-          logger.warn("Failed to reinitialize speech service after settings change", {
-            error: e.message
-          });
-        }
+      if (changedGemini) llmService.initializeClient();
+      if (hasSpeechChanges) {
+        speechService.initializeClient();
+        this.speechAvailable = speechService.isAvailable();
+        windowManager.broadcastToAllWindows("speech-availability", { available: this.speechAvailable });
       }
-
-      logger.info("Settings saved successfully", {
-        ...settings,
-        persistedEnvKeys: persistedKeys
-      });
+      this.broadcastPanelState();
+      if (catalogChanged) void this.refreshPanelModels();
+      logger.info("Settings saved successfully", { persistedEnvKeys: persistedKeys });
       return { success: true, persistedEnvKeys: persistedKeys };
     } catch (error) {
       logger.error("Failed to save settings", { error: error.message });
@@ -1808,12 +1622,6 @@ class ApplicationController {
       }
     }
 
-    // Update process.env so the running app picks up the new values
-    // immediately (and so the settings UI reads the same source of truth).
-    for (const key of keys) {
-      process.env[key] = String(updates[key]);
-    }
-
     const newContent = outLines.join("\n");
     try {
       const tmpPath = envPath + ".tmp";
@@ -1827,6 +1635,7 @@ class ApplicationController {
       return [];
     }
 
+    for (const key of keys) process.env[key] = String(updates[key]);
     logger.info("Persisted .env updates", { keys: Array.from(updated) });
     return Array.from(updated);
   }
