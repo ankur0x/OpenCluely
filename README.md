@@ -6,11 +6,11 @@ OpenCluely is a Windows desktop AI assistant with a draggable, translucent chat 
 
 | Download | When to use it |
 | --- | --- |
-| [Windows installer](https://github.com/ankur0x/OpenCluely/releases/download/charcoal-v1.0.0/OpenCluely-Setup-1.0.0.exe) | Install OpenCluely and add a Start menu shortcut. |
-| [Portable EXE](https://github.com/ankur0x/OpenCluely/releases/download/charcoal-v1.0.0/OpenCluely-Portable-1.0.0-x64.exe) | Run OpenCluely directly without an installer. |
-| [SHA-256 checksums](https://github.com/ankur0x/OpenCluely/releases/download/charcoal-v1.0.0/SHA256SUMS.txt) | Verify the downloaded file. |
+| [Windows installer](https://github.com/ankur0x/OpenCluely/releases/download/connection-v1.0.1/OpenCluely-Setup-1.0.1.exe) | Install OpenCluely and add a Start menu shortcut. |
+| [Portable EXE](https://github.com/ankur0x/OpenCluely/releases/download/connection-v1.0.1/OpenCluely-Portable-1.0.1-x64.exe) | Run OpenCluely directly without an installer. |
+| [SHA-256 checksums](https://github.com/ankur0x/OpenCluely/releases/download/connection-v1.0.1/SHA256SUMS.txt) | Verify the downloaded file. |
 
-[Release notes](https://github.com/ankur0x/OpenCluely/releases/tag/charcoal-v1.0.0). Both Windows executables are unsigned.
+[Release notes](https://github.com/ankur0x/OpenCluely/releases/tag/connection-v1.0.1). Both Windows executables are unsigned.
 
 ## Getting started
 

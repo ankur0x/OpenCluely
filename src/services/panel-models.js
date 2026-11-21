@@ -1,5 +1,7 @@
 'use strict';
 
+const { providerRequest, connectionDetail } = require('./provider-request');
+
 const providers = {
     gemini: { label: 'Gemini', key: 'GEMINI_API_KEY', models: 'GEMINI_MODEL', defaults: ['gemini-3.1-flash-lite'] },
     openrouter: { label: 'OpenRouter Free', key: 'OPENROUTER_API_KEY', defaults: ['openrouter/free'], url: 'https://openrouter.ai/api/v1/chat/completions' },
@@ -70,7 +72,7 @@ async function fetchProviderModels() {
                 const url = new URL(modelListUrls[id]);
                 const signal = AbortSignal.timeout(12000);
                 for (let page = 0; page < 10; page++) {
-                    const response = await fetch(url, { headers, redirect: 'error', signal });
+                    const response = await providerRequest(url, { headers, redirect: 'error', signal });
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     const data = await response.json();
                     for (const model of readCatalogPage(id, data)) if (typeof model === 'string') models.add(model);
@@ -168,14 +170,14 @@ async function streamChat({ provider, model, text, images = [], history, onDelta
     const local = provider === 'ollama';
     let result;
     try {
-        result = await fetch(url, {
+        result = await providerRequest(url, {
             method: 'POST', headers, redirect: 'error',
             body: JSON.stringify(body),
             signal: AbortSignal.any([signal, AbortSignal.timeout(120000)])
         });
     } catch (error) {
         if (signal.aborted) throw error;
-        throw new Error(local ? 'Start Ollama on this computer and check the model name in Settings.' : 'Could not connect to ' + label + '.');
+        throw new Error((local ? 'Could not reach local Ollama. ' : 'Could not connect to ' + label + '. ') + connectionDetail(error));
     }
     if (!result.ok) {
         if (result.status === 429) throw new Error(label + ' rate limit reached. Try again or select another model.');
@@ -253,7 +255,7 @@ async function transcribeCloud(provider, wav, signal = undefined) {
         ] }] });
     }
     const timeout = AbortSignal.timeout(45000);
-    const result = await fetch(url, { method: 'POST', headers, body, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    const result = await providerRequest(url, { method: 'POST', headers, body, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!result.ok) throw new Error(providers[provider].label + ' speech returned HTTP ' + result.status + '. Check its key, quota, and model in Settings.');
     const payload = await result.json();
     const text = isGroq ? payload.text : payload.candidates?.[0]?.content?.parts?.filter(part => !part.thought).map(part => part.text || '').join('');
