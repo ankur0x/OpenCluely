@@ -162,6 +162,36 @@ function buildRequest(provider, model, text, images, history) {
     return { headers, url: config.url, body: { model, messages, stream: true } };
 }
 
+async function providerHttpError(result, label, { key, local, hasImages } = {}) {
+    let payload;
+    try {
+        payload = await result.json();
+    } catch {
+        payload = null;
+    }
+    const details = payload?.error;
+    const message = typeof details?.message === 'string' ? details.message :
+        typeof details === 'string' ? details : '';
+    const code = String(details?.code || details?.status || '');
+    if (result.status === 401 || /invalid_api_key|API_KEY_INVALID/i.test(code)) {
+        return new Error(label + ' rejected the API key. Replace its key in Settings and save.');
+    }
+    if (result.status === 429) return new Error(label + ' rate limit or quota reached. Check your provider account or choose another model.');
+    if (local && result.status === 404) return new Error('Ollama could not find this model. Install it locally or update Settings.');
+    if (/API key not valid|API_KEY_INVALID/i.test(message)) {
+        return new Error(label + ' rejected the API key. Replace its key in Settings and save.');
+    }
+    let safeMessage = message;
+    if (key) safeMessage = safeMessage.split(key).join('[redacted]');
+    safeMessage = safeMessage.replace(/AIza[\w-]{30,}|gsk_[\w-]{20,}|sk-[\w-]{20,}/g, '[redacted]').slice(0, 700);
+    if (safeMessage) return new Error(label + ' returned HTTP ' + result.status + ': ' + safeMessage);
+    if (hasImages && [400, 413, 422].includes(result.status)) {
+        return new Error(label + ' rejected the images. Try fewer images or an image-capable model.');
+    }
+    return new Error(label + ' returned HTTP ' + result.status + '. Check the selected model and provider settings.');
+}
+
+
 async function streamChat({ provider, model, text, images = [], history, onDelta, signal }) {
     const option = getPanelModels().chat.find(item => item.id === provider);
     if (!option?.configured || !option.models.includes(model)) throw new Error('Configure an answer model in Settings.');
@@ -180,10 +210,9 @@ async function streamChat({ provider, model, text, images = [], history, onDelta
         throw new Error((local ? 'Could not reach local Ollama. ' : 'Could not connect to ' + label + '. ') + connectionDetail(error));
     }
     if (!result.ok) {
-        if (result.status === 429) throw new Error(label + ' rate limit reached. Try again or select another model.');
-        if (local && result.status === 404) throw new Error('Ollama could not find this model. Install it locally or update Settings.');
-        if (images.length && [400, 413, 422].includes(result.status)) throw new Error('The provider rejected the images. Try fewer images or an image-capable model.');
-        throw new Error(label + ' returned HTTP ' + result.status + '. Check the model ID and credentials in Settings.');
+        throw await providerHttpError(result, label, {
+            key: process.env[providers[provider].key], local, hasImages: images.length > 0
+        });
     }
 
     let answer = '';
@@ -256,7 +285,7 @@ async function transcribeCloud(provider, wav, signal = undefined) {
     }
     const timeout = AbortSignal.timeout(45000);
     const result = await providerRequest(url, { method: 'POST', headers, body, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-    if (!result.ok) throw new Error(providers[provider].label + ' speech returned HTTP ' + result.status + '. Check its key, quota, and model in Settings.');
+    if (!result.ok) throw await providerHttpError(result, providers[provider].label + ' speech', { key });
     const payload = await result.json();
     const text = isGroq ? payload.text : payload.candidates?.[0]?.content?.parts?.filter(part => !part.thought).map(part => part.text || '').join('');
     return typeof text === 'string' && text.trim().toLowerCase() !== '<silence>' ? text.trim() : '';

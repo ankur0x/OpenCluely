@@ -6,11 +6,11 @@ OpenCluely is a Windows desktop AI assistant with a draggable, translucent chat 
 
 | Download | When to use it |
 | --- | --- |
-| [Windows installer](https://github.com/ankur0x/OpenCluely/releases/download/network-v1.0.3/OpenCluely-Setup-1.0.3.exe) | Install OpenCluely and add a Start menu shortcut. |
-| [Portable EXE](https://github.com/ankur0x/OpenCluely/releases/download/network-v1.0.3/OpenCluely-Portable-1.0.3-x64.exe) | Run OpenCluely directly without an installer. |
-| [SHA-256 checksums](https://github.com/ankur0x/OpenCluely/releases/download/network-v1.0.3/SHA256SUMS.txt) | Verify the downloaded file. |
+| [Windows installer](https://github.com/ankur0x/OpenCluely/releases/download/verified-v1.0.5/OpenCluely-Setup-1.0.5.exe) | Install OpenCluely and add a Start menu shortcut. |
+| [Portable EXE](https://github.com/ankur0x/OpenCluely/releases/download/verified-v1.0.5/OpenCluely-Portable-1.0.5-x64.exe) | Run OpenCluely directly without an installer. |
+| [SHA-256 checksums](https://github.com/ankur0x/OpenCluely/releases/download/verified-v1.0.5/SHA256SUMS.txt) | Verify the downloaded file. |
 
-[Release notes](https://github.com/ankur0x/OpenCluely/releases/tag/network-v1.0.3). Both Windows executables are unsigned.
+[Release notes](https://github.com/ankur0x/OpenCluely/releases/tag/verified-v1.0.5). Both Windows executables are unsigned.
 
 ## Getting started
 

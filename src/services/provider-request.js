@@ -6,6 +6,60 @@ const { Readable } = require('node:stream');
 
 // Serialize multipart bodies with Request, then use Node's native transport.
 // This keeps catalog, streaming chat, and audio requests on the same path.
+function chromiumRequest(net, address, method, headers, body, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(signal.reason || new Error('Request canceled.'));
+            return;
+        }
+        const request = net.request({ url: address.href, method, redirect: 'error' });
+        const abort = () => {
+            request.abort();
+            reject(signal.reason || new Error('Request canceled.'));
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        request.once('close', () => signal?.removeEventListener('abort', abort));
+        request.once('error', reject);
+        request.once('response', response => {
+            const responseHeaders = new Headers();
+            for (const [name, value] of Object.entries(response.headers)) {
+                if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
+            }
+            const stream = new ReadableStream({
+                start(controller) {
+                    let ended = false;
+                    const fail = error => {
+                        if (ended) return;
+                        ended = true;
+                        controller.error(error);
+                    };
+                    response.once('end', () => {
+                        if (ended) return;
+                        ended = true;
+                        controller.close();
+                    });
+                    response.once('error', fail);
+                    response.once('aborted', () => fail(new Error('Provider response interrupted.')));
+                    response.on('data', chunk => {
+                        if (!ended) controller.enqueue(new Uint8Array(chunk));
+                    });
+                },
+                cancel() { request.abort(); }
+            });
+            resolve(new Response(stream, { status: response.statusCode, headers: responseHeaders }));
+        });
+        for (const [name, value] of Object.entries(headers)) {
+            if (!['content-length', 'host', 'transfer-encoding', 'connection'].includes(name.toLowerCase())) {
+                request.setHeader(name, value);
+            }
+        }
+        // Write the serialized bytes directly. This avoids converting Blob
+        // objects between Node and Chromium's different fetch implementations.
+        if (body) request.write(body);
+        request.end();
+    });
+}
+
 async function providerRequest(url, options = {}) {
     const serialized = new Request(url, options);
     const body = options.body === undefined ? null : Buffer.from(await serialized.arrayBuffer());
@@ -43,13 +97,9 @@ async function providerRequest(url, options = {}) {
         if (!process.versions.electron || options.signal?.aborted ||
             !['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN'].includes(connectionCode)) throw error;
         const { app, net } = require('electron');
-        if (!app.isReady() || typeof net.fetch !== 'function') throw error;
+        if (!app.isReady() || typeof net.request !== 'function') throw error;
         try {
-            return await net.fetch(address.href, {
-                method: serialized.method, headers,
-                body: body ? new Blob([body]) : undefined,
-                redirect: 'error', signal: options.signal
-            });
+            return await chromiumRequest(net, address, serialized.method, headers, body, options.signal);
         } catch (fallbackError) {
             fallbackError.nativeCode = connectionCode;
             fallbackError.nativeAddress = error.address;
