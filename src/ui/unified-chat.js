@@ -18,9 +18,12 @@ let collapsed = false;
 let sessionActive = true;
 let speechBusy = false;
 let modelState = null;
+let keepHistory = true;
+let historyLoaded = false;
 const panelAudio = createPanelAudio(api, showError);
 
 function saveHistory() {
+    if (!keepHistory) { localStorage.removeItem(historyKey); return; }
     try {
         const removed = history.splice(0, Math.max(0, history.length - 500));
         const ids = removed.flatMap(item => item.imageIds || []);
@@ -104,7 +107,7 @@ function showMessageImages(body, images) {
 function appendUserMessage(type, text, images = []) {
     const body = addMessage(type, text);
     showMessageImages(body, images.map(image => image.preview));
-    for (const image of images) {
+    for (const image of keepHistory ? images : []) {
         chatImageStore.put(image.id, image.preview).catch(() => showError('An image could not be saved in local history.'));
     }
     history.push({ kind: 'message', type, text, imageIds: images.map(image => image.id) });
@@ -133,15 +136,17 @@ function appendMarkdown(body, text) {
 }
 
 function appendCode(body, language, text) {
-    const block = document.createElement('div');
+    const block = document.createElement('details');
     block.className = 'code';
-    const header = document.createElement('header');
+    block.open = text.split('\n').length <= 18;
+    const header = document.createElement('summary');
     const label = document.createElement('span');
     label.textContent = language;
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.textContent = 'Copy';
-    copy.addEventListener('click', async () => {
+    copy.addEventListener('click', async event => {
+        event.preventDefault(); event.stopPropagation();
         try {
             if (await api.copyToClipboard(text)) copy.textContent = 'Copied';
         } catch {
@@ -162,6 +167,7 @@ function appendCode(body, language, text) {
 function renderAnswer(body, text) {
     body.replaceChildren();
     body.classList.add('rendered');
+    elements.followups.hidden = false;
     let start = 0;
     for (const match of text.matchAll(/(```|~~~)([^\n]*)\n([\s\S]*?)\1/g)) {
         appendMarkdown(body, text.slice(start, match.index));
@@ -170,6 +176,14 @@ function renderAnswer(body, text) {
     }
     appendMarkdown(body, text.slice(start));
     window.renderMathInElement?.(body);
+    const author = body.parentElement.querySelector('.author');
+    if (author && !author.querySelector('button')) {
+        const copy = document.createElement('button');
+        copy.type = 'button'; copy.className = 'copy-answer'; copy.textContent = 'Copy';
+        copy.setAttribute('aria-label', 'Copy assistant response');
+        copy.onclick = async () => { try { if (await api.copyToClipboard(text)) copy.textContent = 'Copied'; } catch { showError('Could not copy the response.'); } };
+        author.append(copy);
+    }
 }
 
 function loadHistory() {
@@ -217,6 +231,8 @@ function syncControls() {
     elements.send.disabled = !sessionActive || messageSending;
     elements.voiceModel.disabled = recording;
     syncInlinePickerLabel(elements.voiceModel);
+    elements.voiceProvider.disabled = recording;
+    syncInlinePickerLabel(elements.voiceProvider);
     elements.session.setAttribute('aria-label', sessionActive ? 'Stop session' : 'Start session');
     elements.sessionIcon.className = sessionActive ? 'fas fa-stop' : 'fas fa-play';
     const selectedVoice = modelState?.selectedVoice || '';
@@ -242,6 +258,14 @@ function updateModelOptions(select, options, value) {
 function updatePanel(state) {
     if (!state) return;
     modelState = state;
+    keepHistory = state.historyEnabled !== false;
+    document.documentElement.style.setProperty('--panel-alpha', String((state.panelOpacity || 94) / 100));
+    document.documentElement.style.setProperty('--panel-font', state.panelTextSize === 'large' ? '16px' : '14px');
+    if (!historyLoaded) { historyLoaded = true; if (keepHistory) loadHistory(); }
+    if (!keepHistory) {
+        localStorage.removeItem(historyKey);
+        chatImageStore.clear().catch(() => {});
+    }
     if (sessionActive && !state.active) {
         resetAttachment();
         for (const response of pendingResponses.values()) {
@@ -255,7 +279,13 @@ function updatePanel(state) {
     updateModelOptions(elements.answerProvider, state.chat, state.selectedChat);
     updateModelOptions(elements.answerModel,
         (answer?.models || []).map(id => ({ id, label: id, configured: answer.configured })), state.selectedChatModel);
-    updateModelOptions(elements.voiceModel, state.voice, state.selectedVoice);
+    const voiceProvider = state.selectedVoice.split(':')[0];
+    const voiceNames = {whisper:'Whisper',groq:'Groq',gemini:'Gemini',azure:'Azure'};
+    updateModelOptions(elements.voiceProvider, [...new Set(state.voice.map(item => item.id.split(':')[0]))]
+        .map(id => ({id,label:voiceNames[id] || id})), voiceProvider);
+    updateModelOptions(elements.voiceModel, state.voice.filter(item => item.id.split(':')[0] === voiceProvider), state.selectedVoice);
+    elements.answerSummary.textContent = (answer?.label || 'Answer') + ' · ' + state.selectedChatModel;
+    elements.voiceSummary.textContent = (voiceNames[voiceProvider] || voiceProvider) + ' · ' + (state.selectedVoice.split(':')[1] || 'Speech');
     setRecording(state.recording);
     updateScreenshotNotice();
 }
@@ -304,6 +334,7 @@ function resetAttachment() {
 
 function clearConversation() {
     history = [];
+    elements.followups.hidden = true;
     saveHistory();
     chatImageStore.clear().catch(() => showError('Could not clear locally stored images.'));
     pendingResponses.clear();
@@ -398,12 +429,13 @@ elements.session.addEventListener('click', async () => {
 });
 elements.settings.addEventListener('click', () => api.showSettings().catch(() => showError('Could not open Settings.')));
 for (const [kind, select] of [
-    ['provider', elements.answerProvider], ['model', elements.answerModel], ['voice', elements.voiceModel]
+    ['provider', elements.answerProvider], ['model', elements.answerModel], ['voice', elements.voiceModel], ['voiceProvider', elements.voiceProvider]
 ]) {
     select.addEventListener('change', async () => {
         select.disabled = true;
         try {
-            const result = kind === 'voice' ? await api.selectPanelModel('voice', select.value)
+            const result = kind === 'voiceProvider' ? await api.selectPanelModel('voice', modelState.voice.find(item => item.id.split(':')[0] === select.value).id)
+                : kind === 'voice' ? await api.selectPanelModel('voice', select.value)
                 : await api.selectPanelModel('chat', elements.answerProvider.value, kind === 'model' ? select.value : undefined);
             if (!result?.success) throw new Error(result?.error || 'Could not switch models.');
             elements.chatError.hidden = true;
@@ -518,6 +550,7 @@ api.onChatUserMessage(({ type, text, images }) => {
     appendUserMessage(type, text, images);
 });
 api.onTranscriptionLlmResponseStart((_event, { messageId }) => {
+    elements.followups.hidden = true;
     pendingResponses.set(messageId, { body: addMessage('assistant', 'Thinking...'), text: '' });
 });
 api.onTranscriptionLlmResponseChunk((_event, { messageId, delta }) => {
@@ -548,5 +581,31 @@ api.onChatRequestError(({ messageId, error }) => {
 if (window.Prism?.plugins?.autoloader) {
     window.Prism.plugins.autoloader.languages_path = './node_modules/prismjs/components/';
 }
-loadHistory();
+document.querySelectorAll('[data-followup]').forEach(button => {
+    button.onclick = () => {
+        elements.draft.value = button.dataset.followup;
+        elements.draft.focus();
+    };
+});
+function closeModelMenus() {
+    for (const type of ['answer','voice']) {
+        elements[type + 'Menu'].hidden = true;
+        elements[type + 'MenuButton'].setAttribute('aria-expanded','false');
+    }
+}
+for (const type of ['answer','voice']) {
+    elements[type + 'MenuButton'].onclick = () => {
+        const opening = elements[type + 'Menu'].hidden;
+        closeModelMenus();
+        elements[type + 'Menu'].hidden = !opening;
+        elements[type + 'MenuButton'].setAttribute('aria-expanded',String(opening));
+    };
+}
+document.querySelectorAll('[data-close-menu]').forEach(button => button.onclick = closeModelMenus);
+document.addEventListener('pointerdown', event => {
+    if (!event.target.closest('.model-menu,.model-chip')) closeModelMenus();
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeModelMenus(); if (!elements.clearPrompt.hidden) elements.cancelClear.click(); }
+});
 })();

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onChatUserMessage: (callback) => ipcRenderer.on('chat-user-message', (_event, data) => callback(data)),
   discardChatImage: id => ipcRenderer.invoke('discard-chat-image', id),
   attachChatImage: bytes => ipcRenderer.invoke('attach-chat-image', bytes),
+  testPanelProvider: (provider, model) => ipcRenderer.invoke('test-panel-provider', provider, model),
   refreshPanelModels: () => ipcRenderer.invoke('refresh-panel-models'),
   onChatScreenshotReady: (callback) => ipcRenderer.on('chat-screenshot-ready', (_event, data) => callback(data)),
   onChatRequestError: (callback) => ipcRenderer.on('chat-request-error', (_event, data) => callback(data)),

@@ -1,77 +1,83 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>OpenCluely Settings</title>
-  <link rel="stylesheet" href="./src/styles/chat.css">
-  <link rel="stylesheet" href="./src/styles/panel-settings.css">
-</head>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>OpenCluely Settings</title><link rel="stylesheet" href="./src/styles/chat.css"><link rel="stylesheet" href="./src/styles/panel-settings.css"></head>
 <body class="provider-settings">
-  <header><h1>Settings</h1><button type="button" id="close" aria-label="Close settings">&#215;</button></header>
-  <form id="providerForm" autocomplete="off">
-    <section aria-labelledby="answersHeading">
-      <div class="settings-action">
-        <h2 id="answersHeading">Answer models</h2>
-        <button type="button" id="refreshModels">Refresh model lists</button>
-      </div>
-      <p id="catalogStatus" class="setting-note" role="status"></p>
-      <label>Gemini API key<input id="geminiKey" type="password" placeholder="Google AI Studio key" autocomplete="off"></label>
-      <select id="geminiCatalog" hidden size="2" data-inline-picker data-model-provider="gemini" aria-label="Gemini model"><option value="">Gemini model</option></select>
-      <label>Gemini model IDs <small>Separate multiple IDs with commas.</small><input id="geminiModel" placeholder="gemini-3.1-flash-lite" spellcheck="false"></label>
-      <details>
-        <summary>Groq and OpenRouter</summary>
-        <label>Groq API key <small>Used for answers and voice</small><input id="groqKey" type="password" autocomplete="off"></label>
-        <select id="groqCatalog" hidden size="2" data-inline-picker data-model-provider="groq" aria-label="Groq model"><option value="">Groq model</option></select>
-        <label>Groq answer model IDs<input id="groqModels" placeholder="openai/gpt-oss-20b" spellcheck="false"></label>
-        <label>OpenRouter API key <small>Lists free models only</small><input id="openRouterKey" type="password" autocomplete="off"></label>
-        <select id="openrouterCatalog" hidden size="2" data-inline-picker data-model-provider="openrouter" aria-label="OpenRouter Free model"><option value="">OpenRouter Free model</option></select>
-      </details>
-      <details>
-        <summary>Local Ollama</summary>
-        <label>Ollama model IDs <small>Use names from <code>ollama list</code>, separated by commas.</small><input id="ollamaModel" placeholder="qwen2.5-coder:7b" spellcheck="false"></label>
-        <select id="ollamaCatalog" hidden size="2" data-inline-picker data-model-provider="ollama" aria-label="Ollama model"><option value="">Ollama model</option></select>
-      </details>
-      <details>
-        <summary>OpenAI and Claude</summary>
-        <label>OpenAI API key<input id="openAIKey" type="password" autocomplete="off"></label>
-        <select id="openaiCatalog" hidden size="2" data-inline-picker data-model-provider="openai" aria-label="OpenAI model"><option value="">OpenAI model</option></select>
-        <label>OpenAI model IDs<input id="openAIModels" placeholder="gpt-4.1-mini" spellcheck="false"></label>
-        <label>Anthropic API key<input id="claudeKey" type="password" autocomplete="off"></label>
-        <select id="claudeCatalog" hidden size="2" data-inline-picker data-model-provider="claude" aria-label="Claude model"><option value="">Claude model</option></select>
-        <label>Claude model IDs<input id="claudeModels" placeholder="claude-haiku-5-5" spellcheck="false"></label>
-      </details>
-    </section>
-    <section aria-labelledby="speechHeading">
-      <h2 id="speechHeading">Voice models</h2>
-      <div class="settings-action">
-        <div><strong>Whisper on this PC</strong><small>Choose the model size from the panel.</small></div>
-        <button type="button" id="setupWhisper">Install Whisper</button>
-      </div>
-      <details>
-        <summary>Whisper configuration</summary>
-        <label>Local command<input id="whisperCommand" placeholder="whisper" spellcheck="false"></label>
-        <label>Transcription language<input id="whisperLanguage" placeholder="auto"></label>
-      </details>
-      <details>
-        <summary>Gemini and Groq transcription</summary>
-        <p class="setting-note">These providers receive microphone audio for transcription. Choose the voice provider in the panel.</p>
-        <label>Gemini voice model ID <small>Choose a Gemini model that supports audio input.</small><input id="geminiVoiceModel" placeholder="gemini-3.1-flash-lite" spellcheck="false"></label>
-      </details>
-      <details>
-        <summary>Azure Speech</summary>
-        <label>Azure API key<input id="azureKey" type="password" autocomplete="off"></label>
-        <label>Azure region<input id="azureRegion" placeholder="e.g. eastus"></label>
-      </details>
-    </section>
-  </form>
-  <footer>
-    <p id="status" role="status"></p>
-    <div class="settings-action">
-      <button type="button" id="quit">Quit OpenCluely</button>
-      <button id="save" type="submit" form="providerForm">Save settings</button>
-    </div>
-  </footer>
-  <script src="src/ui/inline-picker.js"></script>
-  <script src="src/ui/panel-settings.js"></script>
-</body>
-</html>
+<header class="settings-titlebar"><span class="brand-mark">✦</span><strong>OpenCluely</strong><span class="title-divider">/</span><span>Settings</span><button id="close" type="button" aria-label="Close settings">×</button></header>
+<div class="settings-shell">
+<aside class="settings-sidebar"><p class="nav-label">WORKSPACE</p><nav aria-label="Settings sections">
+<button type="button" data-page="providers" aria-current="page">◈ <span>Providers</span></button>
+<button type="button" data-page="voice">♩ <span>Voice</span></button>
+<button type="button" data-page="panel">▣ <span>Panel & shortcuts</span></button>
+<button type="button" data-page="privacy">◇ <span>Privacy & history</span></button>
+<button type="button" data-page="diagnostics">⌁ <span>Diagnostics</span></button>
+</nav><div class="sidebar-bottom"><small>One conversation.<br>Your choice of models.</small><button id="quit" type="button">Quit OpenCluely</button></div></aside>
+<form id="providerForm" autocomplete="off">
+<section class="settings-page" data-settings-page="providers"><div class="page-intro"><span class="eyebrow">Connections</span><h1>Your models, one place.</h1><p>Connect a provider, choose a model, and make it your default.</p></div>
+<div class="provider-workspace"><nav class="provider-list" aria-label="AI providers"><button type="button" data-provider-tab="gemini" aria-pressed="true"><span class="provider-avatar">G</span><span>Gemini<small>Free tier available</small></span><span class="provider-dot" data-provider-dot="gemini"></span></button><button type="button" data-provider-tab="groq" aria-pressed="false"><span class="provider-avatar">G</span><span>Groq<small>Free tier available</small></span><span class="provider-dot" data-provider-dot="groq"></span></button><button type="button" data-provider-tab="openrouter" aria-pressed="false"><span class="provider-avatar">O</span><span>OpenRouter Free<small>Free models</small></span><span class="provider-dot" data-provider-dot="openrouter"></span></button><button type="button" data-provider-tab="ollama" aria-pressed="false"><span class="provider-avatar">O</span><span>Ollama<small>Local</small></span><span class="provider-dot" data-provider-dot="ollama"></span></button><button type="button" data-provider-tab="openai" aria-pressed="false"><span class="provider-avatar">O</span><span>OpenAI<small>API billing</small></span><span class="provider-dot" data-provider-dot="openai"></span></button><button type="button" data-provider-tab="claude" aria-pressed="false"><span class="provider-avatar">C</span><span>Claude<small>API billing</small></span><span class="provider-dot" data-provider-dot="claude"></span></button></nav><div class="provider-content"><article class="provider-editor" data-provider-editor="gemini" >
+<div class="section-title"><div><h2>Gemini</h2><p>Google AI Studio · text and image input</p></div><span class="badge" data-provider-badge="gemini">Not configured</span></div>
+<label for="geminiKey">API key</label><div class="secret-field"><input data-setting id="geminiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key"><button type="button" data-reveal="geminiKey" aria-label="Show Gemini API key">Show</button></div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="gemini">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="gemini" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="geminiCatalog">Answer model</label><select id="geminiCatalog" hidden size="2" data-inline-picker data-model-provider="gemini" aria-label="Gemini answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="gemini">Use as default</button></div>
+<details><summary>Advanced model IDs</summary><label for="geminiModel">Additional model IDs</label><input data-setting id="geminiModel" spellcheck="false" placeholder="gemini-3.1-flash-lite"><small>Separate IDs with commas. Save, then refresh to update the catalog.</small></details></article><article class="provider-editor" data-provider-editor="groq" hidden>
+<div class="section-title"><div><h2>Groq</h2><p>Fast answers and Whisper transcription</p></div><span class="badge" data-provider-badge="groq">Not configured</span></div>
+<label for="groqKey">API key</label><div class="secret-field"><input data-setting id="groqKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key"><button type="button" data-reveal="groqKey" aria-label="Show Groq API key">Show</button></div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="groq">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="groq" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="groqCatalog">Answer model</label><select id="groqCatalog" hidden size="2" data-inline-picker data-model-provider="groq" aria-label="Groq answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="groq">Use as default</button></div>
+<details><summary>Advanced model IDs</summary><label for="groqModels">Additional model IDs</label><input data-setting id="groqModels" spellcheck="false" placeholder="openai/gpt-oss-20b"><small>Separate IDs with commas. Save, then refresh to update the catalog.</small></details></article><article class="provider-editor" data-provider-editor="openrouter" hidden>
+<div class="section-title"><div><h2>OpenRouter Free</h2><p>A catalog filtered to free models</p></div><span class="badge" data-provider-badge="openrouter">Not configured</span></div>
+<label for="openRouterKey">API key</label><div class="secret-field"><input data-setting id="openRouterKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key"><button type="button" data-reveal="openRouterKey" aria-label="Show OpenRouter Free API key">Show</button></div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="openrouter">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="openrouter" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="openrouterCatalog">Answer model</label><select id="openrouterCatalog" hidden size="2" data-inline-picker data-model-provider="openrouter" aria-label="OpenRouter Free answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="openrouter">Use as default</button></div>
+<small>Only free models appear in this catalog. Provider limits may apply.</small></article><article class="provider-editor" data-provider-editor="ollama" hidden>
+<div class="section-title"><div><h2>Ollama</h2><p>Run downloaded models on this computer</p></div><span class="badge" data-provider-badge="ollama">Not configured</span></div>
+<div class="info-note">Ollama connects to <code>127.0.0.1:11434</code>. Start Ollama and download a model before refreshing.</div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="ollama">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="ollama" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="ollamaCatalog">Answer model</label><select id="ollamaCatalog" hidden size="2" data-inline-picker data-model-provider="ollama" aria-label="Ollama answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="ollama">Use as default</button></div>
+<details><summary>Advanced model IDs</summary><label for="ollamaModel">Additional model IDs</label><input data-setting id="ollamaModel" spellcheck="false" placeholder="qwen2.5-coder:7b"><small>Separate IDs with commas. Save, then refresh to update the catalog.</small></details></article><article class="provider-editor" data-provider-editor="openai" hidden>
+<div class="section-title"><div><h2>OpenAI</h2><p>Connect an OpenAI API account</p></div><span class="badge" data-provider-badge="openai">Not configured</span></div>
+<label for="openAIKey">API key</label><div class="secret-field"><input data-setting id="openAIKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key"><button type="button" data-reveal="openAIKey" aria-label="Show OpenAI API key">Show</button></div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="openai">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="openai" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="openaiCatalog">Answer model</label><select id="openaiCatalog" hidden size="2" data-inline-picker data-model-provider="openai" aria-label="OpenAI answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="openai">Use as default</button></div>
+<details><summary>Advanced model IDs</summary><label for="openAIModels">Additional model IDs</label><input data-setting id="openAIModels" spellcheck="false" placeholder="gpt-4.1-mini"><small>Separate IDs with commas. Save, then refresh to update the catalog.</small></details></article><article class="provider-editor" data-provider-editor="claude" hidden>
+<div class="section-title"><div><h2>Claude</h2><p>Connect an Anthropic API account</p></div><span class="badge" data-provider-badge="claude">Not configured</span></div>
+<label for="claudeKey">API key</label><div class="secret-field"><input data-setting id="claudeKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key"><button type="button" data-reveal="claudeKey" aria-label="Show Claude API key">Show</button></div><small class="field-help">Keys are saved on this computer and sent to the selected provider.</small>
+<div class="button-row"><button type="button" data-test-provider="claude">Test connection</button><button type="button" data-refresh>↻ Refresh models</button></div>
+<p class="test-feedback" data-test-result="claude" role="status">Connection has not been tested.</p>
+<div class="field-divider"></div><label for="claudeCatalog">Answer model</label><select id="claudeCatalog" hidden size="2" data-inline-picker data-model-provider="claude" aria-label="Claude answer model"><option value="">Choose a model</option></select>
+<div class="model-note"><small>Image support depends on the chosen model.</small><button type="button" data-default="claude">Use as default</button></div>
+<details><summary>Advanced model IDs</summary><label for="claudeModels">Additional model IDs</label><input data-setting id="claudeModels" spellcheck="false" placeholder="claude-haiku-5-5"><small>Separate IDs with commas. Save, then refresh to update the catalog.</small></details></article></div></div><p id="catalogStatus" class="setting-note" role="status"></p></section>
+<section class="settings-page" data-settings-page="voice" hidden><div class="page-intro"><span class="eyebrow">Audio</span><h1>A voice that fits your flow.</h1><p>Choose where microphone audio is transcribed.</p></div>
+<div class="settings-card"><div class="section-title"><h2>Transcription</h2><button id="testMic" type="button">Test microphone</button></div>
+<div class="field-grid"><label>Voice provider<select id="speechProvider" data-setting hidden size="2" data-inline-picker aria-label="Voice provider"><option value="whisper">Whisper · on this PC</option><option value="groq">Groq · cloud</option><option value="gemini">Gemini · cloud</option><option value="azure">Azure Speech · cloud</option></select></label>
+<label data-voice-for="whisper">Local model<select id="whisperModel" data-setting hidden size="2" data-inline-picker aria-label="Whisper model"><option>tiny</option><option>base</option><option>small</option><option>medium</option><option>large</option><option>turbo</option></select></label>
+<label data-voice-for="groq" hidden>Groq voice model<input id="groqVoiceModel" data-setting placeholder="whisper-large-v3-turbo"></label>
+<label data-voice-for="gemini" hidden>Gemini audio model<input id="geminiVoiceModel" data-setting placeholder="gemini-3.1-flash-lite"></label>
+</div><p id="voiceDestination" class="info-note"></p><p id="micTestResult" class="setting-note" role="status"></p>
+<div class="setting-row"><div><strong>Automatic transcript messages</strong><small>Finalized speech is sent to the answer model while the mic is on.</small></div><span class="badge">Enabled</span></div></div>
+<div class="settings-card" data-voice-for="whisper"><div class="section-title"><div><h2>Local Whisper</h2><p>Audio stays on this PC. Transcripts go to the answer provider.</p></div><button id="setupWhisper" type="button">Install Whisper</button></div>
+<label>Local command<input data-setting id="whisperCommand" placeholder="whisper"></label><div class="field-grid"><label>Language<input data-setting id="whisperLanguage" placeholder="auto"></label><label>Device<select data-setting id="whisperDevice" hidden size="2" data-inline-picker aria-label="Whisper device"><option value="auto">Auto</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option></select></label></div>
+<small id="installStatus" role="status"></small></div>
+<div class="settings-card" data-voice-for="azure" hidden><h2>Azure credentials</h2><label>Speech key<input data-setting id="azureKey" type="password" autocomplete="off"></label><label>Region<input data-setting id="azureRegion" placeholder="eastus"></label></div>
+<div class="info-note" data-voice-for="groq" hidden>Groq uses the API key from Providers → Groq.</div><div class="info-note" data-voice-for="gemini" hidden>Gemini uses the API key from Providers → Gemini. Choose a model with audio input support.</div></section>
+<section class="settings-page" data-settings-page="panel" hidden><div class="page-intro"><span class="eyebrow">Appearance</span><h1>Make room for your work.</h1><p>A readable, movable panel that stays within reach.</p></div>
+<div class="settings-card"><h2>Panel appearance</h2><label class="setting-row">Opacity <output id="opacityValue">94%</output></label><input data-setting id="panelOpacity" type="range" min="60" max="100" step="1" value="94" aria-label="Panel opacity">
+<div id="appearancePreview" class="appearance-preview"><small>ASSISTANT</small><p>Your next thought, clearly presented.</p></div>
+<label>Text size<select data-setting id="panelTextSize" hidden size="2" data-inline-picker aria-label="Panel text size"><option value="default">Default</option><option value="large">Larger</option></select></label></div>
+<div class="settings-card"><h2>Keyboard shortcuts</h2><div class="setting-row"><span>Screenshot</span><kbd>Ctrl + Shift + S</kbd></div><div class="setting-row"><span>Microphone on / off</span><kbd>Alt + R</kbd></div><div class="setting-row"><span>Show / hide windows</span><kbd>Ctrl + Shift + V</kbd></div><div class="setting-row"><span>Open Settings</span><kbd>Ctrl + ,</kbd></div><div class="setting-row"><span>Send message / new line</span><kbd>Enter / Shift + Enter</kbd></div><small>Drag the handle above the conversation to move the panel.</small></div></section>
+<section class="settings-page" data-settings-page="privacy" hidden><div class="page-intro"><span class="eyebrow">Control</span><h1>Your conversation, your control.</h1><p>Understand what is saved and where your messages go.</p></div>
+<div class="settings-card"><h2>Conversation history</h2><label class="setting-row"><span><strong>Keep history on this computer</strong><small>Restore messages and image attachments when you reopen the app.</small></span><input id="historyEnabled" data-setting type="checkbox" checked></label><p class="setting-note">Turning this off removes saved chat and images. The current conversation stays visible until cleared. Providers may retain data under their own policies.</p>
+<div class="setting-row"><div><strong>Clear conversation</strong><small>Remove messages, attachments and the model’s session context.</small></div><button type="button" id="clearHistory">Clear history</button></div><div id="clearPrompt" role="group" aria-label="Clear conversation and saved history?" hidden><span>Clear this conversation?</span><button id="cancelClear" type="button" class="confirm-no">× No</button><button id="confirmClear" type="button" class="confirm-yes">✓ Yes</button></div></div>
+<div class="settings-card"><h2>Data flow</h2><p id="dataFlow" class="info-note"></p><div class="setting-row"><div><strong>Screen capture protection</strong><small>Requested for app windows. Support depends on the OS and capture tool.</small></div><span class="badge">Enabled</span></div><small>Menus, confirmations and image previews open inside app windows.</small><p class="setting-note">API keys are stored in the app’s local configuration file. Protect access to your Windows account.</p></div></section>
+<section class="settings-page" data-settings-page="diagnostics" hidden><div class="page-intro"><span class="eyebrow">Troubleshooting</span><h1>Check the whole connection.</h1><p>Send a small test request through the same path used by chat.</p></div><div class="settings-card"><h2>Live provider check</h2><label>Provider<select id="diagnosticProvider" hidden size="2" data-inline-picker aria-label="Diagnostic provider"><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="openrouter">OpenRouter Free</option><option value="ollama">Ollama</option><option value="openai">OpenAI</option><option value="claude">Claude</option></select></label><p class="setting-note">Uses saved credentials and the selected model in Providers. This sends a short API request and may use provider quota.</p><button id="runDiagnostics" type="button">Run connection check</button><div id="diagnosticResult" class="diagnostic-result" role="status">Ready to check. No request has been sent.</div></div>
+<div class="settings-card"><h2>If a connection fails</h2><div class="setting-row"><strong>401 / 403</strong><span>Check your API key and account access.</span></div><div class="setting-row"><strong>400 / 404</strong><span>Refresh models and check input support.</span></div><div class="setting-row"><strong>429</strong><span>Check provider quota or wait before retrying.</span></div><div class="setting-row"><strong>Network error</strong><span>Check connectivity, proxy settings and Ollama.</span></div></div></section>
+</form></div>
+<footer class="settings-footer"><span id="status" role="status">Loading settings…</span><button id="discard" type="button" disabled>Discard changes</button><button id="save" type="submit" form="providerForm" disabled>Save changes</button></footer>
+<script src="src/ui/inline-picker.js"></script><script src="src/ui/panel-settings.js"></script></body></html>

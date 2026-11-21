@@ -45,8 +45,8 @@ class WindowManager {
         title: 'OpenCluely'
       },
       chat: {
-        width: 480,
-        height: 495,
+        width: 520,
+        height: 620,
         file: 'chat.html',
         title: 'Chat'
       },
@@ -58,8 +58,8 @@ class WindowManager {
         alwaysOnTop: true
       },
       settings: {
-        width: 470,
-        height: 570,
+        width: 920,
+        height: 680,
         file: 'settings.html',
         title: 'Settings',
         frame: false,
@@ -233,10 +233,12 @@ class WindowManager {
       throw new Error(`Unknown window type: ${type}`);
     }
 
-    // Base options
+    // Keep the redesigned windows usable on smaller displays.
+    const workArea = (this.currentDisplay || screen.getPrimaryDisplay()).workArea;
+    const fitToDisplay = type === 'chat' || type === 'settings';
     const baseOptions = {
-      width: windowConfig.width,
-      height: windowConfig.height,
+      width: fitToDisplay ? Math.min(windowConfig.width, workArea.width) : windowConfig.width,
+      height: fitToDisplay ? Math.min(windowConfig.height, workArea.height) : windowConfig.height,
       webPreferences: {
         ...config.get('window.webPreferences'),
         nodeIntegration: false,
@@ -667,12 +669,12 @@ class WindowManager {
     }
     
     // All windows positioned at top of screen with small margin
-    const topMargin = 20;
-    const [windowWidth] = window.getSize();
+    const [windowWidth, windowHeight] = window.getSize();
+    const topMargin = Math.min(20, Math.max(0, screenHeight - windowHeight));
     
     const positions = {
       main: { x: displayX + 50, y: displayY + topMargin },
-      chat: { x: displayX + screenWidth - windowWidth - 50, y: displayY + topMargin },
+      chat: { x: displayX + Math.max(0, screenWidth - windowWidth - 50), y: displayY + topMargin },
       llmResponse: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin },
       settings: { x: displayX + (screenWidth - windowWidth) / 2, y: displayY + topMargin }
     };

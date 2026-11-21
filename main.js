@@ -438,6 +438,22 @@ class ApplicationController {
     ipcMain.handle("get-panel-state", event => {
       if (this.isPanelOrSettingsSender(event.sender)) return this.getPanelState();
     });
+    ipcMain.handle("test-panel-provider", async (event, provider, model) => {
+      const settingsWindow = windowManager.getWindow('settings');
+      if (!settingsWindow || settingsWindow.webContents !== event.sender) return { success: false };
+      const config = getPanelModels().chat.find(item => item.id === provider);
+      if (!config?.configured || typeof model !== 'string' || !config.models.includes(model)) {
+        return { success: false, error: 'Save an API key and choose an available model first.' };
+      }
+      try {
+        const reply = await streamChat({ provider, model, text: 'Reply with only OK.', images: [], history: [],
+          onDelta: () => {}, signal: AbortSignal.timeout(30000) });
+        if (!String(reply?.response || '').trim()) throw new Error('The provider returned an empty response.');
+        return { success: true, message: 'A live reply was received from ' + config.label + '.', model };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    });
     ipcMain.handle("refresh-panel-models", event => {
       if (this.isPanelOrSettingsSender(event.sender)) return this.refreshPanelModels();
     });
@@ -461,8 +477,8 @@ class ApplicationController {
       const panel = BrowserWindow.fromWebContents(event.sender);
       const bounds = panel.getBounds();
       const work = screen.getDisplayMatching(bounds).workArea;
-      const width = Math.min(work.width, collapsed ? 234 : 480);
-      const height = Math.min(work.height, collapsed ? 54 : 495);
+      const width = Math.min(work.width, collapsed ? 234 : 520);
+      const height = Math.min(work.height, collapsed ? 56 : 620);
       panel.setBounds({
         x: Math.max(work.x, Math.min(Math.round(bounds.x + (bounds.width - width) / 2), work.x + work.width - width)),
         y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)),
@@ -1084,7 +1100,8 @@ class ApplicationController {
 
   getPanelState() {
     const speech = speechService.getStatus();
-    return { ...getPanelModels(), active: this.panelSessionActive, recording: speech.isRecording, speechAvailable: speechService.isAvailable() };
+    return { ...getPanelModels(), panelOpacity: Number(process.env.PANEL_OPACITY) || 94,
+      panelTextSize: process.env.PANEL_TEXT_SIZE || 'default', historyEnabled: process.env.CHAT_HISTORY_ENABLED !== 'false', active: this.panelSessionActive, recording: speech.isRecording, speechAvailable: speechService.isAvailable() };
   }
 
   broadcastPanelState() {
@@ -1409,6 +1426,9 @@ class ApplicationController {
     // using. Empty strings are returned rather than skipped so the UI can
     // distinguish "unset" from "stale value from a previous load".
     return {
+      panelOpacity: Number(process.env.PANEL_OPACITY) || 94,
+      panelTextSize: process.env.PANEL_TEXT_SIZE || 'default',
+      historyEnabled: process.env.CHAT_HISTORY_ENABLED !== 'false',
       codingLanguage: this.codingLanguage || "cpp",
       activeSkill: this.activeSkill || "dsa",
       appIcon: this.appIcon || "terminal",
@@ -1431,6 +1451,7 @@ class ApplicationController {
       ollamaModel: process.env.OLLAMA_MODEL || "",
       groqKey: process.env.GROQ_API_KEY || "",
       groqModels: process.env.GROQ_MODELS || "",
+      groqVoiceModel: process.env.GROQ_VOICE_MODEL || "whisper-large-v3-turbo",
       openAIKey: process.env.OPENAI_API_KEY || "",
       openAIModels: process.env.OPENAI_MODELS || "",
       claudeKey: process.env.ANTHROPIC_API_KEY || "",
@@ -1475,6 +1496,13 @@ class ApplicationController {
       // Writing to .env ensures they survive app restarts and are picked
       // up the next time the app boots.
       const envUpdates = {};
+      if (settings.panelOpacity !== undefined) {
+        const opacity = Number(settings.panelOpacity);
+        if (!Number.isFinite(opacity) || opacity < 60 || opacity > 100) return { success: false, error: 'Choose opacity between 60 and 100.' };
+        envUpdates.PANEL_OPACITY = String(opacity);
+      }
+      if (['default','large'].includes(settings.panelTextSize)) envUpdates.PANEL_TEXT_SIZE = settings.panelTextSize;
+      if (typeof settings.historyEnabled === 'boolean') envUpdates.CHAT_HISTORY_ENABLED = String(settings.historyEnabled);
       if (["azure", "whisper", "groq", "gemini"].includes(settings.speechProvider)) {
         envUpdates.SPEECH_PROVIDER = settings.speechProvider;
       }
